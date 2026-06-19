@@ -1,0 +1,175 @@
+<style>
+  .glass-card {
+    width: 48;
+    padding: 3.2;
+    display: flex;
+    flex-direction: column;
+    gap: 2.4;
+    background-color: rgba(2, 8, 18, 0.75);
+    backdrop-filter: blur(48px);
+    border-radius: 4.8;
+    border-width: 0.1;
+    border-color: rgba(0, 159, 227, 0.25);
+    box-shadow: 0 4 24 rgba(0, 0, 0, 0.5);
+  }
+
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 0.8;
+    border-bottom-width: 0.1;
+    border-color: rgba(0, 159, 227, 0.15);
+    margin-bottom: 1.2;
+  }
+
+  .header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2;
+  }
+
+  .title {
+    font-size: 3.6;
+    font-weight: 300;
+    color: #ffffff;
+    letter-spacing: 0.15;
+    text-transform: uppercase;
+  }
+
+  .title-sub {
+    font-size: 1.2;
+    font-weight: 600;
+    color: rgba(0, 159, 227, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.3;
+  }
+
+  .subtitle {
+    font-size: 1.2;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.3;
+    margin-bottom: 0.8;
+  }
+
+  .grid-2 {
+    display: flex;
+    gap: 1.6;
+  }
+  .grid-2 > * { flex: 1; }
+
+  .section {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2;
+  }
+
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.8;
+    border-radius: 2.0;
+    background-color: rgba(255, 255, 255, 0.03);
+    border-width: 0.1;
+    border-color: rgba(255, 255, 255, 0.1);
+    transition: all 0.2s ease;
+  }
+
+  .btn-text {
+    font-size: 1.8;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+    letter-spacing: 0.05;
+    text-transform: uppercase;
+  }
+
+  .btn.primary {
+    background: linear-gradient(135deg, rgba(0, 159, 227, 0.2), rgba(0, 159, 227, 0.1));
+    border-color: rgba(0, 159, 227, 0.4);
+  }
+  .btn.primary .btn-text { color: #7dd3fc; }
+
+  .btn.accent {
+    background: rgba(0, 159, 227, 0.12);
+    border-color: rgba(0, 159, 227, 0.25);
+  }
+  .btn.accent .btn-text { color: #7dd3fc; }
+
+  .btn.danger {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.85), rgba(220, 38, 38, 0.8));
+    border-color: rgba(248, 113, 113, 0.9);
+  }
+  .btn.danger .btn-text { color: #fff; }
+
+  .btn:active {
+    background-color: rgba(255, 255, 255, 0.15);
+    transform: scale(0.98);
+  }
+
+  .btn.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+    filter: grayscale(20%);
+  }
+
+  .status-container {
+    display: flex;
+    align-items: center;
+    gap: 0.8;
+  }
+  .status-dot {
+    width: 1.0;
+    height: 1.0;
+    border-radius: 0.5;
+    background-color: #4ade80;
+    box-shadow: 0 0 8 rgba(74, 222, 128, 0.6);
+  }
+  .status-text {
+    font-size: 1.4;
+    font-weight: 600;
+    color: #4ade80;
+    letter-spacing: 0.1;
+  }
+</style>
+
+<div class="glass-card">
+
+  <!-- Header -->
+  <div class="header-row">
+    <div class="header-left">
+      <span class="title">Rhoda</span>
+      <span class="title-sub">Lab Assistant</span>
+    </div>
+    <div class="status-container">
+      <div class="status-dot"></div>
+      <span class="status-text" id="status-mode">READY</span>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="section">
+    <span class="subtitle">Control</span>
+
+    <div class="grid-2">
+      <button id="btn-talk" class="btn primary">
+        <span class="btn-text" id="btn-talk-label">Mute</span>
+      </button>
+      <button id="btn-summon" class="btn">
+        <span class="btn-text">Summon</span>
+      </button>
+    </div>
+
+    <div class="grid-2">
+      <button id="btn-follow" class="btn">
+        <span class="btn-text">Autofollow</span>
+      </button>
+      <button id="btn-reset" class="btn">
+        <span class="btn-text">Reset</span>
+      </button>
+    </div>
+  </div>
+
+</div>
