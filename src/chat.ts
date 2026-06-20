@@ -1,6 +1,6 @@
 import { askGemini, type ChatTurn } from './genai';
 import { getContextForQuery } from './rag';
-import { getPendingConfirmation, confirmPending, denyPending } from './instrument';
+// instrument.ts only used by XR avatar — chat routes all instrument calls through Flask backend
 import { sessionLogger } from './session';
 import { diagnoseTrace, type DiagnoseResult } from './anomaly';
 import { getProgress } from './progress';
