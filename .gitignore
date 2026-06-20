@@ -10,12 +10,20 @@ dist/
 .env
 .env.local
 .env.production
+.env.*
+!.env.example
 
 # IDE files
 .vscode/
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
 # OS files
 .DS_Store
@@ -34,7 +42,7 @@ pids
 *.seed
 *.pid.lock
 
-# Coverage directory used by tools like istanbul
+# Coverage
 coverage/
 *.lcov
 
@@ -42,30 +50,39 @@ coverage/
 .tmp/
 .temp/
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Local SSL certificates (auto-generated)
+# Local SSL certificates
 .cert/
 *.pem
 *.key
+localhost+*.pem
+localhost+*-key.pem
 
 # Meta Spatial Editor exports
 public/gltf/generated/
 public/glxf/
 public/ui/
 
-# Environment Secrets
-.env
-.env.*
-!.env.example
+# Claude Code local settings
+.claude/settings.local.json
 
-# Claude Code
-.claude/
+# Python
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.Python
+pip-log.txt
+
+# API keys / secrets
+*.secret
+secrets.json
+credentials.json
+service-account*.json
+
+# LibreOffice lock files
+.~lock.*

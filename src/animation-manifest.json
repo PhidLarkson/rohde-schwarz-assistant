@@ -23,23 +23,6 @@
     "/gltf/motion/idle/M_Standing_Idle_Variations_009.glb",
     "/gltf/motion/idle/M_Standing_Idle_Variations_010.glb"
   ],
-  "dance": [
-    "/gltf/motion/dance/F_Dances_001.glb",
-    "/gltf/motion/dance/F_Dances_004.glb",
-    "/gltf/motion/dance/F_Dances_005.glb",
-    "/gltf/motion/dance/F_Dances_006.glb",
-    "/gltf/motion/dance/F_Dances_007.glb",
-    "/gltf/motion/dance/M_Dances_001.glb",
-    "/gltf/motion/dance/M_Dances_002.glb",
-    "/gltf/motion/dance/M_Dances_003.glb",
-    "/gltf/motion/dance/M_Dances_004.glb",
-    "/gltf/motion/dance/M_Dances_005.glb",
-    "/gltf/motion/dance/M_Dances_006.glb",
-    "/gltf/motion/dance/M_Dances_007.glb",
-    "/gltf/motion/dance/M_Dances_008.glb",
-    "/gltf/motion/dance/M_Dances_009.glb",
-    "/gltf/motion/dance/M_Dances_011.glb"
-  ],
   "expression": [
     "/gltf/motion/expression/F_Talking_Variations_001.glb",
     "/gltf/motion/expression/F_Talking_Variations_002.glb",

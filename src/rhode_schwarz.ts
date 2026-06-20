@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
-import { transcribeAudio, translateText, askGemini, textToSpeech, geminiTranscribeAudio, geminiTTS } from './genai';
+import { transcribeAudio, translateText, askGemini, textToSpeech, geminiTranscribeAudio, geminiTTS, type ChatTurn } from './genai';
 import { AudioRecorder } from './audioRecorder';
 import { AudioFeedback } from './audioFeedback';
 import manifest from './animation-manifest.json';
@@ -9,6 +9,7 @@ import { getContextForQuery } from './rag';
 import { executeFunction, getInstrumentState, getPendingConfirmation, confirmPending, denyPending } from './instrument';
 import { diagnoseTrace } from './anomaly';
 import { getNudge } from './progress';
+import { getActiveWorkflow, getCurrentStep, advanceStep, getWorkflowContext, startWorkflow, getTotalSteps } from './workflows';
 
 export type RhodeSchwarzState = 'READY' | 'LISTENING' | 'PROCESSING' | 'SPEAKING';
 
@@ -20,8 +21,6 @@ export class RhodeSchwarzAssistant {
   private currentIdleIndex: number = 0;
 
   // New Animation Categories
-  private danceAnimations: THREE.AnimationAction[] = [];
-  private currentDanceIndex: number = 0;
 
   private exprAnimations: THREE.AnimationAction[] = [];
   private currentExprIndex: number = 0;
@@ -30,10 +29,8 @@ export class RhodeSchwarzAssistant {
   private currentLocoIndex: number = 0;
 
   private talkingAction: THREE.AnimationAction | null = null;
-  private danceAction: THREE.AnimationAction | null = null;
 
   private currentAction: THREE.AnimationAction | null = null;
-  private isDancing: boolean = false;
 
   public getGroundY(): number {
     return this.groundY ?? 0;
@@ -77,6 +74,7 @@ export class RhodeSchwarzAssistant {
   private isRecording: boolean = false;
   private statusLabel: string = 'READY';
   private language: 'en' | 'tw' = 'en';
+  private conversationHistory: ChatTurn[] = [];
 
 
   /**
@@ -97,7 +95,7 @@ export class RhodeSchwarzAssistant {
     if (newIdle) {
       this.idleAction = newIdle;
       // If currently in READY state (not talking/dancing), fade in new idle immediately
-      if (this.currentState === 'READY' && !this.isDancing) {
+      if (this.currentState === 'READY') {
         newIdle.reset().fadeIn(0.5).play();
         this.currentAction = newIdle;
       }
@@ -114,26 +112,6 @@ export class RhodeSchwarzAssistant {
 
 
 
-  public cycleDance() {
-    if (this.danceAnimations.length === 0) return;
-
-    // Stop current
-    if (this.currentAction) {
-      this.currentAction.fadeOut(0.3);
-    }
-
-    this.currentDanceIndex = (this.currentDanceIndex + 1) % this.danceAnimations.length;
-    const action = this.danceAnimations[this.currentDanceIndex];
-    this.isDancing = true;
-
-    action.reset().fadeIn(0.3).play();
-    this.currentAction = action;
-
-    const name = action.getClip().name;
-    this.setStatusLabel(`Dance: ${name}`);
-    console.log('💃 Cycling dance:', name);
-  }
-
   public cycleExpression() {
     if (this.exprAnimations.length === 0) return;
 
@@ -141,7 +119,7 @@ export class RhodeSchwarzAssistant {
     if (this.currentAction) {
       this.currentAction.fadeOut(0.3);
     }
-    this.isDancing = false;
+    
 
     this.currentExprIndex = (this.currentExprIndex + 1) % this.exprAnimations.length;
     const action = this.exprAnimations[this.currentExprIndex];
@@ -161,7 +139,7 @@ export class RhodeSchwarzAssistant {
     if (this.currentAction) {
       this.currentAction.fadeOut(0.3);
     }
-    this.isDancing = false;
+    
 
     this.currentLocoIndex = (this.currentLocoIndex + 1) % this.locoAnimations.length;
     const action = this.locoAnimations[this.currentLocoIndex];
@@ -358,37 +336,7 @@ export class RhodeSchwarzAssistant {
   private async loadBackgroundAnimations(loader: GLTFLoader, remainingIdleFiles: string[]) {
     console.log('⏳ Starting background animation load...');
 
-    // Load remaining idle variations
-    for (const path of remainingIdleFiles) {
-      try {
-        const gltf = await new Promise<any>((resolve) => loader.load(path, resolve));
-        if (gltf.animations && gltf.animations.length > 0) {
-          const clip = gltf.animations[0];
-          const name = path.split('/').pop()?.replace('.glb', '') || clip.name;
-          clip.name = name;
-          const action = this.mixer!.clipAction(clip);
-          action.setLoop(THREE.LoopRepeat, Infinity);
-          this.idleAnimations.push(action);
-        }
-      } catch (e) { }
-    }
-
-    // --- DANCE ANIMATIONS ---
-    const danceFiles = manifest.dance || [];
-    for (const path of danceFiles) {
-      try {
-        const gltf = await new Promise<any>((resolve) => loader.load(path, resolve));
-        if (gltf.animations && gltf.animations.length > 0) {
-          const clip = gltf.animations[0];
-          clip.name = path.split('/').pop()?.replace('.glb', '') || clip.name;
-          const action = this.mixer!.clipAction(clip);
-          action.setLoop(THREE.LoopRepeat, Infinity);
-          this.danceAnimations.push(action);
-        }
-      } catch (e) { }
-    }
-
-    // --- EXPRESSION ANIMATIONS ---
+    // Load EXPRESSION/TALKING animations first — critical for lip sync demo
     const exprFiles = manifest.expression || [];
     for (const path of exprFiles) {
       try {
@@ -402,8 +350,26 @@ export class RhodeSchwarzAssistant {
         }
       } catch (e) { }
     }
+    if (this.exprAnimations.length > 0) {
+      this.talkingAction = this.exprAnimations[0];
+      console.log(`✅ Talking animations ready: ${this.exprAnimations.length} loaded`);
+    }
 
-    // --- LOCOMOTION ANIMATIONS ---
+    // Remaining idle variations
+    for (const path of remainingIdleFiles) {
+      try {
+        const gltf = await new Promise<any>((resolve) => loader.load(path, resolve));
+        if (gltf.animations && gltf.animations.length > 0) {
+          const clip = gltf.animations[0];
+          clip.name = path.split('/').pop()?.replace('.glb', '') || clip.name;
+          const action = this.mixer!.clipAction(clip);
+          action.setLoop(THREE.LoopRepeat, Infinity);
+          this.idleAnimations.push(action);
+        }
+      } catch (e) { }
+    }
+
+    // Locomotion animations
     const locoFiles = manifest.locomotion || [];
     for (const path of locoFiles) {
       try {
@@ -418,11 +384,7 @@ export class RhodeSchwarzAssistant {
       } catch (e) { }
     }
 
-    // Assign defaults if available
-    if (this.danceAnimations.length > 0) this.danceAction = this.danceAnimations[0];
-    if (this.exprAnimations.length > 0) this.talkingAction = this.exprAnimations[0];
-
-    console.log(`✅ Background load complete. Total Idle: ${this.idleAnimations.length}, Dance: ${this.danceAnimations.length}`);
+    console.log(`✅ Background load complete. Talking: ${this.exprAnimations.length}, Idle: ${this.idleAnimations.length}, Locomotion: ${this.locoAnimations.length}`);
   }
 
   // Switch between animations with smooth crossfade
@@ -435,26 +397,6 @@ export class RhodeSchwarzAssistant {
 
     toAction.reset().fadeIn(duration).play();
     this.currentAction = toAction;
-  }
-
-  // Public method to toggle dance
-  public toggleDance() {
-    if (this.isDancing) {
-      // Stop dancing, return to idle
-      if (this.idleAction) {
-        this.switchAnimation(this.idleAction, 0.5);
-      }
-      this.isDancing = false;
-      console.log('🎬 Stopped dancing');
-    } else {
-      // Start dancing
-      if (this.danceAction) {
-        this.switchAnimation(this.danceAction, 0.5);
-      }
-      this.isDancing = true;
-      console.log('💃 Started dancing!');
-    }
-    return this.isDancing;
   }
 
   // Face the camera each frame
@@ -514,7 +456,7 @@ export class RhodeSchwarzAssistant {
     let target = camPos.clone();
 
     // Occasional random glances (only in READY/Idle state)
-    if (this.currentState === 'READY' && !this.isDancing) {
+    if (this.currentState === 'READY') {
       this.glanceTimer -= delta;
       if (this.glanceTimer <= 0) {
         // Toggle glance
@@ -617,6 +559,7 @@ export class RhodeSchwarzAssistant {
   public resetConversation() {
     this.lastResponse = "";
     this.currentTranscript = "";
+    this.conversationHistory = [];
     this.stopListening();
   }
 
@@ -899,8 +842,50 @@ export class RhodeSchwarzAssistant {
       }
     }
 
-    // 3) Check for anomaly/troubleshooting keywords
+    // 3a) Check for workflow triggers
     const lower = transcript.toLowerCase();
+    if (/next step|continue|done with this step|move on/.test(lower) && getActiveWorkflow()) {
+      const nextStep = advanceStep();
+      if (nextStep) {
+        const msg = `Step ${nextStep.id} of ${getTotalSteps()}: ${nextStep.instruction}. ${nextStep.detail}${nextStep.safetyCheck ? ' Warning: ' + nextStep.safetyCheck : ''}`;
+        sessionLogger.logAssistantResponse(msg);
+        this.conversationHistory.push({ role: 'user', content: transcript }, { role: 'model', content: msg });
+        await this.speakAndReset(msg);
+        return;
+      } else {
+        const msg = 'Workflow complete! All steps done. Great job!';
+        sessionLogger.logAssistantResponse(msg);
+        await this.speakAndReset(msg);
+        return;
+      }
+    }
+
+    if (/walk me through|guide me|help me measure|start workflow/.test(lower)) {
+      if (/sine|1.?khz|measure/.test(lower)) {
+        startWorkflow('measure-1khz-sine');
+        const step = getCurrentStep();
+        if (step) {
+          const msg = `Starting the measurement workflow. Step 1 of ${getTotalSteps()}: ${step.instruction}. ${step.detail}`;
+          sessionLogger.logAssistantResponse(msg);
+          this.conversationHistory.push({ role: 'user', content: transcript }, { role: 'model', content: msg });
+          await this.speakAndReset(msg);
+          return;
+        }
+      }
+      if (/safety|overvoltage|overload|danger/.test(lower)) {
+        startWorkflow('safety-overvoltage');
+        const step = getCurrentStep();
+        if (step) {
+          const msg = `Starting the safety workflow. Step 1 of ${getTotalSteps()}: ${step.instruction}. ${step.detail}. Warning: ${step.safetyCheck}`;
+          sessionLogger.logAssistantResponse(msg);
+          this.conversationHistory.push({ role: 'user', content: transcript }, { role: 'model', content: msg });
+          await this.speakAndReset(msg);
+          return;
+        }
+      }
+    }
+
+    // 3b) Check for anomaly/troubleshooting keywords
     if (/noise|noisy|clip|unstable|drift|alias|wrong|broken|fault|problem|issue|diagnos/.test(lower)) {
       this.setStatusLabel('Diagnosing...');
       const diagnosis = await diagnoseTrace({ description: transcript });
@@ -917,13 +902,21 @@ export class RhodeSchwarzAssistant {
     const ragContext = getContextForQuery(transcript);
     const instrState = JSON.stringify(getInstrumentState(), null, 1);
 
-    // 5) Ask Gemini with full context
-    const response = await askGemini(transcript, ragContext, instrState);
+    // 5) Ask Gemini with full context + conversation history + active workflow
+    const wfContext = getWorkflowContext() || undefined;
+    const response = await askGemini(transcript, ragContext, instrState, this.conversationHistory, wfContext);
     if (!response || response.trim().length === 0) {
       throw new Error('AI returned empty response.');
     }
     this.lastResponse = response;
     sessionLogger.logAssistantResponse(response);
+
+    // Track conversation for multi-turn context (cap at 20 turns)
+    this.conversationHistory.push({ role: 'user', content: transcript });
+    this.conversationHistory.push({ role: 'model', content: response });
+    if (this.conversationHistory.length > 40) {
+      this.conversationHistory = this.conversationHistory.slice(-40);
+    }
 
     // 6) Check if Gemini's response implies a WRITE action
     const writeMatch = response.match(/(?:set|change|adjust|switch|enable|disable|configure)\s+(?:the\s+)?(\w[\w\s]*?)(?:\s+to\s+|\s+from\s+)/i);
@@ -1003,7 +996,7 @@ export class RhodeSchwarzAssistant {
     this.audioFeedback.ready();
     this.setStatusLabel('Ready');
 
-    if (this.idleAction && !this.isDancing) {
+    if (this.idleAction) {
       this.switchAnimation(this.idleAction, 0.5);
     }
 
@@ -1152,7 +1145,7 @@ export class RhodeSchwarzAssistant {
       this.setStatusLabel('Message failed');
 
       // Switch back to idle on error (unless dancing)
-      if (this.idleAction && !this.isDancing) {
+      if (this.idleAction) {
         this.switchAnimation(this.idleAction, 0.5);
       }
     }
@@ -1237,7 +1230,7 @@ export class RhodeSchwarzAssistant {
             } catch (e) { /* ignore */ }
           }
 
-          if (this.idleAction && !this.isDancing) {
+          if (this.idleAction) {
             this.switchAnimation(this.idleAction, 0.5);
           }
           resolve();
@@ -1245,7 +1238,7 @@ export class RhodeSchwarzAssistant {
 
         this.currentAudioSource = source;
 
-        if (this.talkingAction && !this.isDancing) {
+        if (this.talkingAction) {
           this.switchAnimation(this.talkingAction, 0.2);
         }
 
@@ -1357,7 +1350,7 @@ export class RhodeSchwarzAssistant {
       // Stop locomotion immediately when we stop approaching
       // BUT do not force idle while speaking — allow talking animation to play during speech
       const speaking = this.currentState === 'SPEAKING';
-      if (this.idleAction && this.currentAction !== this.idleAction && !this.isDancing && !speaking) {
+      if (this.idleAction && this.currentAction !== this.idleAction && !speaking) {
         this.switchAnimation(this.idleAction, 0.3);
         console.log('🧍 Stopped approaching → back to idle');
       }
@@ -1370,7 +1363,7 @@ export class RhodeSchwarzAssistant {
     this.mesh.lookAt(camPos.x, groundY, camPos.z);
 
     // Locomotion animation removed: do not switch animations while approaching.
-    // We keep the current animation (idle/talking/dance) and simply lerp position toward the camera.
+    // We keep the current animation (idle/talking/) and simply lerp position toward the camera.
   }
 
   public async startRecording() {

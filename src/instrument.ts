@@ -308,3 +308,112 @@ export function getFunctionDescriptions(): string {
     `- ${f.name} [${f.category}]: ${f.description}`
   ).join('\n');
 }
+
+// ── Flask API Bridge ──
+// When the Python Flask server is running, route calls through it.
+// Falls back to local mock if the server is unreachable.
+
+const FLASK_API = import.meta.env.VITE_INSTRUMENT_API || 'http://localhost:5001';
+let flaskAvailable: boolean | null = null;
+
+async function checkFlask(): Promise<boolean> {
+  if (flaskAvailable !== null) return flaskAvailable;
+  try {
+    const r = await fetch(`${FLASK_API}/api/health`, { signal: AbortSignal.timeout(1500) });
+    flaskAvailable = r.ok;
+  } catch {
+    flaskAvailable = false;
+  }
+  console.log(`🔌 Instrument API: ${flaskAvailable ? 'Flask server connected' : 'using local mock'}`);
+  return flaskAvailable;
+}
+
+export async function readStateRemote(scope: string = 'all'): Promise<CallFunctionResult> {
+  if (!(await checkFlask())) {
+    return executeFunction({ name: 'get_instrument_state', params: {} });
+  }
+  try {
+    const r = await fetch(`${FLASK_API}/api/instrument/state?scope=${scope}`);
+    const data = await r.json();
+    sessionLogger.logToolCall('read_state', { scope }, 'READ', data.result);
+    return { status: data.ok ? 'ok' : 'error', result: data.result, error: data.error };
+  } catch (err) {
+    return executeFunction({ name: 'get_instrument_state', params: {} });
+  }
+}
+
+export async function setParameterRemote(
+  path: string,
+  value: unknown,
+  confirmed: boolean = false,
+  confirmationId?: string,
+): Promise<CallFunctionResult> {
+  if (!(await checkFlask())) {
+    // Map to local mock function name
+    return executeFunction({
+      name: mapPathToFunction(path),
+      params: mapPathToParams(path, value),
+      confirmed,
+    });
+  }
+  try {
+    const r = await fetch(`${FLASK_API}/api/instrument/set`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, value, confirmed, confirmationId }),
+    });
+    const data = await r.json();
+    if (data.needsConfirmation) {
+      pendingCall = { name: 'set_parameter', params: { path, value } };
+      return {
+        status: 'confirmation_required',
+        confirmation_prompt: data.summary,
+        result: data.result,
+      };
+    }
+    sessionLogger.logToolCall('set_parameter', { path, value }, 'WRITE', data.result, confirmed);
+    return { status: data.ok ? 'ok' : 'error', result: data.result, error: data.error };
+  } catch (err) {
+    return executeFunction({
+      name: mapPathToFunction(path),
+      params: mapPathToParams(path, value),
+      confirmed,
+    });
+  }
+}
+
+export async function runMeasurementRemote(
+  measurementType: string,
+  source?: string,
+): Promise<CallFunctionResult> {
+  if (!(await checkFlask())) {
+    return executeFunction({ name: 'get_measurement', params: {} });
+  }
+  try {
+    const r = await fetch(`${FLASK_API}/api/instrument/measure`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ measurementType, source, confirmed: true }),
+    });
+    const data = await r.json();
+    sessionLogger.logToolCall('run_measurement', { measurementType, source }, 'READ', data.result);
+    return { status: data.ok ? 'ok' : 'error', result: data.result, error: data.error };
+  } catch (err) {
+    return executeFunction({ name: 'get_measurement', params: {} });
+  }
+}
+
+function mapPathToFunction(path: string): string {
+  if (path.includes('timebase') || path.includes('record_length')) return 'set_timebase';
+  if (path.includes('vertical_scale') || path.includes('scale')) return 'set_vertical_scale';
+  if (path.includes('coupling')) return 'set_channel_coupling';
+  if (path.includes('trigger')) return 'set_trigger';
+  if (path.includes('enabled')) return 'set_channel_enabled';
+  return 'set_timebase';
+}
+
+function mapPathToParams(path: string, value: unknown): Record<string, unknown> {
+  const parts = path.split('.');
+  const channel = parts.find(p => /^\d+$/.test(p));
+  return { channel: channel ? parseInt(channel) : 1, value };
+}

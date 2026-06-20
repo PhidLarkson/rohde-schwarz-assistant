@@ -248,26 +248,48 @@ export async function translateText(text: string, fromLanguage: string, toLangua
   }
 }
 
+export interface ChatTurn { role: 'user' | 'model'; content: string }
+
 /**
- * Ask Gemini with English text and get an English response
+ * Ask Gemini with English text and get an English response.
+ * Optionally pass conversation history for multi-turn context.
  */
-export async function askGemini(text: string, ragContext?: string, instrumentState?: string): Promise<string> {
+export async function askGemini(
+  text: string,
+  ragContext?: string,
+  instrumentState?: string,
+  history?: ChatTurn[],
+  workflowContext?: string,
+): Promise<string> {
   try {
     console.log(`🤖 [GEMINI] Asking: "${text.substring(0, 50)}..."`);
 
-    let prompt = text;
+    let systemPrompt = SYSTEM_INSTRUCTION;
+    if (workflowContext) {
+      systemPrompt += '\n\n' + workflowContext;
+    }
+
+    let userMessage = text;
     if (ragContext) {
-      prompt = `[REFERENCE DOCUMENTS]\n${ragContext}\n\n[STUDENT QUESTION]\n${text}`;
+      userMessage = `[REFERENCE DOCUMENTS]\n${ragContext}\n\n[STUDENT QUESTION]\n${text}`;
     }
     if (instrumentState) {
-      prompt = `[OSCILLOSCOPE STATE]\n${instrumentState}\n\n${prompt}`;
+      userMessage = `[OSCILLOSCOPE STATE]\n${instrumentState}\n\n${userMessage}`;
     }
+
+    const contents: { role: string; parts: { text: string }[] }[] = [];
+    if (history && history.length > 0) {
+      for (const turn of history) {
+        contents.push({ role: turn.role, parts: [{ text: turn.content }] });
+      }
+    }
+    contents.push({ role: 'user', parts: [{ text: userMessage }] });
 
     const result = await gemini.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: prompt,
+      contents,
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction: systemPrompt,
         thinkingConfig: { thinkingBudget: 0 }
       }
     });
