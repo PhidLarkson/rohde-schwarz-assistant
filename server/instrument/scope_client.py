@@ -166,7 +166,9 @@ def build_mock_client() -> ScopeClient:
 
 
 def discover_usb_instruments() -> list[str]:
-    """List all VISA resources visible to RsInstrument."""
+    """List all VISA resources visible to RsInstrument.
+    Docs: https://rsinstrument.readthedocs.io/en/latest/
+    Use list_resources('?*') for all, 'USB::?*' for USB only."""
     if RsInstrument is None:
         return []
     try:
@@ -180,19 +182,46 @@ def build_rs_instrument_client(
     resource_name: str,
     reset: bool = False,
     id_query: bool = True,
+    simulate: bool = False,
 ) -> ScopeClient:
+    """Connect to a real R&S instrument via RsInstrument.
+    resource_name: VISA address, or 'USB'/'AUTO' for auto-discovery.
+    simulate: if True, uses RsInstrument simulation mode (no hardware needed).
+    Docs: https://rsinstrument.readthedocs.io/en/latest/"""
     if RsInstrument is None:
-        raise RuntimeError("RsInstrument is not installed — pip install RsInstrument")
+        raise RuntimeError(
+            "RsInstrument is not installed.\n"
+            "  pip install RsInstrument\n"
+            "  pip install pyvisa-py    (pure Python VISA backend)\n"
+            "Docs: https://rsinstrument.readthedocs.io/en/latest/"
+        )
 
-    # Auto-discover if resource_name is "USB" or "auto"
     if resource_name.upper() in ("USB", "AUTO"):
         resources = discover_usb_instruments()
         if not resources:
-            raise RuntimeError("No VISA instruments found. Check USB connection and drivers.")
+            raise RuntimeError(
+                "No VISA instruments found.\n"
+                "  - Check USB cable connection\n"
+                "  - Ensure oscilloscope is powered on\n"
+                "  - Install VISA backend: pip install pyvisa-py\n"
+                "  - Or install R&S VISA from rohde-schwarz.com"
+            )
         resource_name = resources[0]
-        print(f"  Auto-discovered instrument: {resource_name}")
+        print(f"  Auto-discovered: {resource_name}")
 
-    instrument = RsInstrument(resource_name, id_query=id_query, reset=reset)
+    options = ""
+    if simulate:
+        options = "Simulate=True"
+
+    instrument = RsInstrument(resource_name, id_query=id_query, reset=reset, options=options)
+
+    # Check for startup errors
+    errors = instrument.query_all_errors()
+    if errors:
+        print(f"  Instrument errors on connect: {errors}")
+
+    print(f"  IDN: {instrument.idn_string}")
+
     backend = RsInstrumentBackend(instrument)
     return ScopeClient(backend)
 

@@ -32,11 +32,17 @@ CORS(app)
 from instrument.scope_client import build_mock_client, build_rs_instrument_client, discover_usb_instruments
 
 SCOPE_RESOURCE = os.environ.get("SCOPE_RESOURCE")
+SCOPE_SIMULATE = os.environ.get("SCOPE_SIMULATE", "").lower() in ("1", "true", "yes")
 if SCOPE_RESOURCE:
-    print(f"🔬 Instrument: connecting to {SCOPE_RESOURCE}")
-    scope = build_rs_instrument_client(SCOPE_RESOURCE)
+    print(f"🔬 Instrument: connecting to {SCOPE_RESOURCE}" + (" (simulation)" if SCOPE_SIMULATE else ""))
+    try:
+        scope = build_rs_instrument_client(SCOPE_RESOURCE, simulate=SCOPE_SIMULATE)
+    except Exception as e:
+        print(f"🔬 Instrument: connection failed — {e}")
+        print("🔬 Instrument: falling back to simulator")
+        scope = build_mock_client()
 else:
-    print("🔬 Instrument: mock mode (set SCOPE_RESOURCE for real hardware)")
+    print("🔬 Instrument: simulator (set SCOPE_RESOURCE=USB for real hardware)")
     scope = build_mock_client()
 
 
