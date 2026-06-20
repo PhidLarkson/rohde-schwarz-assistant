@@ -111,22 +111,21 @@ export class DashboardSystem extends createSystem({
       const result = await identifyComponent(frame);
       this.setStatus(result.label);
 
-      // Speak result with Gemini TTS + avatar animation
       const speech = `${result.description || result.label}${result.safety_note ? '. ' + result.safety_note : ''}`;
       if (rs) {
         try {
           rs.setState('SPEAKING');
           rs.setStatusLabel('Speaking...');
           const audio = await geminiTTS(speech);
+          // playAudioBlob starts talking animation + lip sync, returns to idle on end
           await rs.playAudioBlob(audio);
-          rs.setState('READY');
-          rs.setStatusLabel('Ready');
         } catch (_) {
           const u = new SpeechSynthesisUtterance(speech);
           u.lang = 'en-US';
           speechSynthesis.speak(u);
-          rs.setState('READY');
         }
+        rs.setState('READY');
+        rs.setStatusLabel('Ready');
       }
 
       setTimeout(() => this.setStatus('Ready'), 6000);
