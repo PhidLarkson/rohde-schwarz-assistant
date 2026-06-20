@@ -50,11 +50,13 @@ def _op(r):
 
 
 @app.route("/api/instrument/state", methods=["GET"])
+@app.route("/api/state", methods=["GET"])
 def instrument_state():
     return jsonify(_op(scope.read_state(scope=request.args.get("scope", "all"))))
 
 
 @app.route("/api/instrument/set", methods=["POST"])
+@app.route("/api/set", methods=["POST"])
 def instrument_set():
     d = request.get_json(force=True)
     return jsonify(_op(scope.set_parameter(
@@ -65,6 +67,7 @@ def instrument_set():
 
 
 @app.route("/api/instrument/measure", methods=["POST"])
+@app.route("/api/measure", methods=["POST"])
 def instrument_measure():
     d = request.get_json(force=True)
     return jsonify(_op(scope.run_measurement(
@@ -76,6 +79,7 @@ def instrument_measure():
 
 
 @app.route("/api/instrument/confirm", methods=["POST"])
+@app.route("/api/confirm", methods=["POST"])
 def instrument_confirm():
     d = request.get_json(force=True)
     return jsonify(_op(scope.set_parameter(
