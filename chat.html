@@ -3,325 +3,197 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rhoda — Virtual Lab Assistant Chat</title>
+  <title>Rhoda — Lab Console</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
-      --bg: #0d1117;
-      --surface: #161b22;
-      --border: #30363d;
-      --text: #e6edf3;
-      --muted: #8b949e;
-      --accent: #00d4aa;
-      --accent-dim: #00d4aa33;
-      --danger: #f85149;
-      --warn: #d29922;
+      --bg: #0c0e14; --surface: #12151e; --surface2: #181c28;
+      --border: #252a3a; --text: #d4dae5; --dim: #6b7394;
+      --cyan: #00e5c8; --cyan-dim: #00e5c822;
+      --red: #ff4d6a; --red-dim: #ff4d6a22;
+      --amber: #ffb547; --amber-dim: #ffb54722;
+      --blue: #5b8cff; --blue-dim: #5b8cff22;
+      --mono: 'SF Mono', 'Cascadia Code', 'Consolas', 'Fira Code', monospace;
     }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      height: 100vh;
-      display: flex;
-    }
-    /* Sidebar */
-    .sidebar {
-      width: 280px;
-      background: var(--surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      flex-shrink: 0;
-    }
-    .sidebar-header {
-      padding: 16px;
-      border-bottom: 1px solid var(--border);
-    }
-    .sidebar-header h1 {
-      font-size: 18px;
-      color: var(--accent);
-    }
-    .sidebar-header p {
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-    .sidebar-section {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-    }
-    .sidebar-section h3 {
-      font-size: 11px;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 8px;
-      letter-spacing: 0.5px;
-    }
-    .workflow-btn {
-      display: block;
-      width: 100%;
-      padding: 10px 12px;
-      margin-bottom: 6px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: 13px;
-      text-align: left;
-      cursor: pointer;
-      transition: border-color 0.2s;
-    }
-    .workflow-btn:hover { border-color: var(--accent); }
-    .workflow-btn .badge {
-      display: inline-block;
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 3px;
-      margin-left: 4px;
-    }
-    .badge-simple { background: var(--accent-dim); color: var(--accent); }
-    .badge-safety { background: #f8514933; color: var(--danger); }
-    /* Instrument state */
-    .instrument-panel {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-    .instrument-panel h3 {
-      font-size: 11px;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 8px;
-    }
-    #instrument-state {
-      font-family: 'SF Mono', 'Consolas', monospace;
-      font-size: 11px;
-      color: var(--muted);
-      line-height: 1.5;
-    }
-    .state-row { display: flex; justify-content: space-between; }
-    .state-label { color: var(--muted); }
-    .state-value { color: var(--text); }
-    /* Progress */
-    .progress-panel { padding: 12px 16px; flex: 1; overflow-y: auto; }
-    .progress-panel h3 {
-      font-size: 11px;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 8px;
-    }
-    .topic-bar {
-      margin-bottom: 6px;
-    }
-    .topic-bar .label {
-      font-size: 11px;
-      color: var(--muted);
-      display: flex;
-      justify-content: space-between;
-    }
-    .topic-bar .bar {
-      height: 4px;
-      background: var(--border);
-      border-radius: 2px;
-      margin-top: 2px;
-    }
-    .topic-bar .fill {
-      height: 100%;
-      background: var(--accent);
-      border-radius: 2px;
-      transition: width 0.3s;
-    }
-    /* Sidebar footer */
-    .sidebar-footer {
-      padding: 12px 16px;
-      border-top: 1px solid var(--border);
-      margin-top: auto;
-    }
-    .sidebar-footer button {
-      width: 100%;
-      padding: 8px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--muted);
-      font-size: 12px;
-      cursor: pointer;
-      margin-bottom: 4px;
-    }
-    .sidebar-footer button:hover { color: var(--text); border-color: var(--accent); }
-    /* Chat area */
-    .chat-area {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-    }
-    .chat-header {
-      padding: 12px 20px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent);
-    }
-    .chat-header span { font-size: 14px; color: var(--muted); }
-    #workflow-status {
-      margin-left: auto;
-      font-size: 12px;
-      color: var(--accent);
-    }
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px;
-    }
-    .message {
-      max-width: 720px;
-      margin: 0 auto 16px;
-      display: flex;
-      gap: 12px;
-    }
-    .msg-avatar {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-    }
-    .msg-user .msg-avatar { background: #30363d; }
-    .msg-assistant .msg-avatar { background: var(--accent-dim); color: var(--accent); }
-    .msg-system .msg-avatar { background: #d2992233; color: var(--warn); }
-    .msg-content {
-      flex: 1;
-      font-size: 14px;
-      line-height: 1.6;
-    }
-    .msg-content p { margin-bottom: 8px; }
-    .msg-content p:last-child { margin-bottom: 0; }
-    .msg-role {
-      font-size: 12px;
-      font-weight: 600;
-      margin-bottom: 4px;
-    }
-    .msg-user .msg-role { color: var(--muted); }
-    .msg-assistant .msg-role { color: var(--accent); }
-    .msg-system .msg-role { color: var(--warn); }
-    /* Confirmation bar */
-    .confirm-bar {
-      display: none;
-      max-width: 720px;
-      margin: 0 auto 16px;
-      padding: 12px 16px;
-      background: #d2992222;
-      border: 1px solid var(--warn);
-      border-radius: 8px;
-    }
-    .confirm-bar.visible { display: flex; align-items: center; gap: 12px; }
-    .confirm-bar p { flex: 1; font-size: 13px; color: var(--warn); }
-    .confirm-bar button {
-      padding: 6px 16px;
-      border-radius: 4px;
-      border: none;
-      font-size: 13px;
-      cursor: pointer;
-      font-weight: 600;
-    }
-    .btn-confirm { background: var(--accent); color: #000; }
-    .btn-deny { background: var(--danger); color: #fff; }
-    /* Input area */
-    .input-area {
-      padding: 16px 20px;
-      border-top: 1px solid var(--border);
-      background: var(--surface);
-    }
-    .input-row {
-      max-width: 720px;
-      margin: 0 auto;
-      display: flex;
-      gap: 8px;
-    }
-    #chat-input {
-      flex: 1;
-      padding: 10px 14px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-size: 14px;
-      outline: none;
-    }
-    #chat-input:focus { border-color: var(--accent); }
-    #chat-input::placeholder { color: var(--muted); }
-    #send-btn {
-      padding: 10px 20px;
-      background: var(--accent);
-      color: #000;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    @media (max-width: 768px) {
-      .sidebar { display: none; }
+    body { font-family: var(--mono); background: var(--bg); color: var(--text); height: 100vh; display: grid; grid-template-columns: 1fr 320px; grid-template-rows: 40px 1fr 56px; overflow: hidden; font-size: 13px; }
+
+    /* ── Top bar ── */
+    .topbar { grid-column: 1 / -1; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 16px; font-size: 11px; }
+    .topbar .logo { color: var(--cyan); font-weight: 700; font-size: 13px; letter-spacing: 1px; }
+    .topbar .sep { color: var(--border); }
+    .indicator { display: flex; align-items: center; gap: 5px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .dot-on { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+    .dot-off { background: var(--dim); }
+    .dot-warn { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+    .topbar-right { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+    .topbar button { background: none; border: 1px solid var(--border); color: var(--dim); padding: 3px 10px; border-radius: 3px; font-family: var(--mono); font-size: 10px; cursor: pointer; }
+    .topbar button:hover { color: var(--text); border-color: var(--dim); }
+
+    /* ── Chat pane ── */
+    .chat-pane { display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
+    .messages { flex: 1; overflow-y: auto; padding: 12px 16px; }
+    .messages::-webkit-scrollbar { width: 4px; }
+    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .msg { margin-bottom: 14px; }
+    .msg-header { font-size: 10px; margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
+    .msg-header .ts { color: var(--dim); }
+    .msg-header .role { font-weight: 700; }
+    .msg-header .role-user { color: var(--blue); }
+    .msg-header .role-assistant { color: var(--cyan); }
+    .msg-header .role-system { color: var(--amber); }
+    .msg-header .role-tool { color: #c084fc; }
+    .msg-body { color: var(--text); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+    .msg-body .safety { color: var(--red); font-weight: 700; }
+    .msg-tag { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 2px; margin-left: 6px; }
+    .tag-read { background: var(--cyan-dim); color: var(--cyan); }
+    .tag-write { background: var(--amber-dim); color: var(--amber); }
+    .tag-anomaly { background: var(--red-dim); color: var(--red); }
+    .tag-rag { background: var(--blue-dim); color: var(--blue); }
+    .tag-workflow { background: #c084fc22; color: #c084fc; }
+
+    /* Confirm banner */
+    .confirm-banner { display: none; padding: 8px 16px; background: var(--amber-dim); border-top: 1px solid #ffb54744; font-size: 11px; color: var(--amber); }
+    .confirm-banner.active { display: flex; align-items: center; gap: 10px; }
+    .confirm-banner p { flex: 1; }
+    .confirm-banner button { font-family: var(--mono); font-size: 11px; padding: 4px 14px; border: none; border-radius: 3px; cursor: pointer; font-weight: 700; }
+    .btn-y { background: var(--cyan); color: #000; }
+    .btn-n { background: var(--red); color: #fff; }
+
+    /* ── Input ── */
+    .input-area { grid-column: 1; background: var(--surface); border-top: 1px solid var(--border); border-right: 1px solid var(--border); display: flex; padding: 10px 16px; gap: 8px; }
+    #input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text); font-family: var(--mono); font-size: 13px; outline: none; resize: none; }
+    #input:focus { border-color: var(--cyan); }
+    #input::placeholder { color: var(--dim); }
+    #send { background: var(--cyan); color: #000; border: none; border-radius: 4px; padding: 8px 18px; font-family: var(--mono); font-size: 13px; font-weight: 700; cursor: pointer; }
+    #send:disabled { opacity: 0.4; cursor: default; }
+
+    /* ── Right panel ── */
+    .panel { display: flex; flex-direction: column; overflow-y: auto; background: var(--surface); }
+    .panel::-webkit-scrollbar { width: 4px; }
+    .panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .panel-section { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    .panel-section h3 { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-bottom: 8px; }
+    .panel-section.collapsed .panel-content { display: none; }
+    .panel-section h3 { cursor: pointer; user-select: none; }
+
+    /* Scope state */
+    .scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 11px; }
+    .scope-grid .k { color: var(--dim); }
+    .scope-grid .v { color: var(--text); text-align: right; }
+    .scope-grid .v-on { color: var(--cyan); }
+    .scope-grid .v-off { color: var(--red); }
+
+    /* Anomaly log */
+    .anomaly-entry { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+    .anomaly-entry:last-child { border-bottom: none; }
+    .anomaly-cause { color: var(--text); margin-bottom: 2px; }
+    .anomaly-conf { color: var(--dim); font-size: 10px; }
+    .anomaly-unsafe { color: var(--red); font-weight: 700; font-size: 10px; }
+
+    /* Session log */
+    .session-entries { font-size: 10px; max-height: 200px; overflow-y: auto; }
+    .slog { padding: 3px 0; border-bottom: 1px solid #252a3a44; display: flex; gap: 6px; }
+    .slog .slog-ts { color: var(--dim); white-space: nowrap; flex-shrink: 0; }
+    .slog .slog-role { font-weight: 700; width: 28px; flex-shrink: 0; }
+    .slog .slog-content { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .slog .slog-role-U { color: var(--blue); }
+    .slog .slog-role-A { color: var(--cyan); }
+    .slog .slog-role-S { color: var(--amber); }
+    .slog .slog-role-T { color: #c084fc; }
+
+    /* Workflow tracker */
+    .wf-step { font-size: 11px; padding: 4px 0; display: flex; gap: 6px; }
+    .wf-num { color: var(--dim); width: 18px; text-align: right; flex-shrink: 0; }
+    .wf-num.active { color: var(--cyan); font-weight: 700; }
+    .wf-text { color: var(--dim); }
+    .wf-text.active { color: var(--text); }
+    .wf-text.done { color: var(--dim); text-decoration: line-through; }
+
+    /* Progress bars */
+    .prog-row { margin-bottom: 6px; }
+    .prog-label { display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); }
+    .prog-bar { height: 3px; background: var(--border); border-radius: 1px; margin-top: 2px; }
+    .prog-fill { height: 100%; background: var(--cyan); border-radius: 1px; transition: width 0.3s; }
+
+    /* Workflow buttons */
+    .wf-btn { display: block; width: 100%; padding: 6px 8px; margin-bottom: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-family: var(--mono); font-size: 11px; text-align: left; cursor: pointer; }
+    .wf-btn:hover { border-color: var(--cyan); }
+    .wf-btn .wf-cat { font-size: 9px; float: right; }
+    .wf-cat-simple { color: var(--cyan); }
+    .wf-cat-safety { color: var(--red); }
+
+    @media (max-width: 800px) {
+      body { grid-template-columns: 1fr; }
+      .panel { display: none; }
+      .input-area { grid-column: 1; border-right: none; }
     }
   </style>
 </head>
 <body>
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <h1>Rhoda</h1>
-      <p>R&S Virtual Lab Assistant</p>
+  <div class="topbar">
+    <span class="logo">RHODA</span>
+    <span class="sep">|</span>
+    <div class="indicator"><div class="dot dot-off" id="dot-scope"></div><span id="scope-label">scope: offline</span></div>
+    <span class="sep">|</span>
+    <div class="indicator"><div class="dot dot-on" id="dot-rag"></div><span>rag: local</span></div>
+    <span class="sep">|</span>
+    <div class="indicator"><span id="session-label">session: —</span></div>
+    <div class="topbar-right">
+      <button id="btn-export">export transcript</button>
+      <button id="btn-clear">clear session</button>
     </div>
-    <div class="sidebar-section">
-      <h3>Guided Workflows</h3>
-      <button class="workflow-btn" data-workflow="measure-1khz-sine">
-        Measure 1 kHz Sine <span class="badge badge-simple">Simple</span>
-      </button>
-      <button class="workflow-btn" data-workflow="safety-overvoltage">
-        Overvoltage Safety <span class="badge badge-safety">Safety</span>
-      </button>
-    </div>
-    <div class="instrument-panel">
-      <h3>Oscilloscope State</h3>
-      <div id="instrument-state">Loading...</div>
-    </div>
-    <div class="progress-panel">
-      <h3>Session Progress</h3>
-      <div id="progress-bars"></div>
-    </div>
-    <div class="sidebar-footer">
-      <button id="btn-export">Export Transcript</button>
-      <button id="btn-instructor" onclick="window.open('/instructor.html','_blank')">Instructor View</button>
-    </div>
-  </aside>
-  <main class="chat-area">
-    <div class="chat-header">
-      <div class="status-dot"></div>
-      <span>Rhoda is online</span>
-      <span id="workflow-status"></span>
-    </div>
+  </div>
+
+  <div class="chat-pane">
     <div class="messages" id="messages"></div>
-    <div class="confirm-bar" id="confirm-bar">
+    <div class="confirm-banner" id="confirm-banner">
       <p id="confirm-text"></p>
-      <button class="btn-confirm" id="btn-confirm-yes">Confirm</button>
-      <button class="btn-deny" id="btn-confirm-no">Deny</button>
+      <button class="btn-y" id="btn-y">CONFIRM</button>
+      <button class="btn-n" id="btn-n">DENY</button>
     </div>
-    <div class="input-area">
-      <div class="input-row">
-        <input type="text" id="chat-input" placeholder="Ask Rhoda about oscilloscope procedures, safety, or troubleshooting..." autocomplete="off" />
-        <button id="send-btn">Send</button>
+  </div>
+
+  <div class="panel" id="panel">
+    <div class="panel-section">
+      <h3>INSTRUMENT STATE</h3>
+      <div class="panel-content">
+        <div class="scope-grid" id="scope-state">
+          <span class="k">status</span><span class="v">not connected</span>
+        </div>
       </div>
     </div>
-  </main>
+    <div class="panel-section">
+      <h3>WORKFLOWS</h3>
+      <div class="panel-content">
+        <button class="wf-btn" data-wf="measure-1khz-sine">measure 1kHz sine <span class="wf-cat wf-cat-simple">simple</span></button>
+        <button class="wf-btn" data-wf="safety-overvoltage">overvoltage safety <span class="wf-cat wf-cat-safety">safety</span></button>
+        <div id="wf-steps"></div>
+      </div>
+    </div>
+    <div class="panel-section">
+      <h3>ANOMALY LOG</h3>
+      <div class="panel-content" id="anomaly-log">
+        <div style="font-size:10px;color:var(--dim)">no anomalies detected</div>
+      </div>
+    </div>
+    <div class="panel-section">
+      <h3>COMPETENCY PROGRESS</h3>
+      <div class="panel-content" id="progress"></div>
+    </div>
+    <div class="panel-section">
+      <h3>SESSION LOG</h3>
+      <div class="panel-content">
+        <div class="session-entries" id="session-log"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <input type="text" id="input" placeholder="query the assistant..." autocomplete="off" spellcheck="false" />
+    <button id="send">SEND</button>
+  </div>
+
   <script type="module" src="/src/chat.ts"></script>
 </body>
 </html>

@@ -2,303 +2,465 @@ import { askGemini, type ChatTurn } from './genai';
 import { getContextForQuery } from './rag';
 import {
   executeFunction, getInstrumentState, getPendingConfirmation,
-  confirmPending, denyPending, getFunctionDescriptions,
+  confirmPending, denyPending, readStateRemote,
 } from './instrument';
 import { sessionLogger } from './session';
-import { diagnoseTrace } from './anomaly';
+import { diagnoseTrace, type DiagnoseResult } from './anomaly';
 import { getProgress } from './progress';
 import {
-  getAvailableWorkflows, startWorkflow, getActiveWorkflow,
-  getCurrentStep, advanceStep, getStepIndex, getTotalSteps,
-  stopWorkflow, getWorkflowContext,
+  startWorkflow, getActiveWorkflow, getCurrentStep,
+  advanceStep, getStepIndex, getTotalSteps, stopWorkflow,
+  getWorkflowContext, getAvailableWorkflows,
 } from './workflows';
 
+// ── DOM refs ──
 const messagesEl = document.getElementById('messages')!;
-const inputEl = document.getElementById('chat-input') as HTMLInputElement;
-const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
-const confirmBar = document.getElementById('confirm-bar')!;
+const inputEl = document.getElementById('input') as HTMLInputElement;
+const sendBtn = document.getElementById('send') as HTMLButtonElement;
+const confirmBanner = document.getElementById('confirm-banner')!;
 const confirmText = document.getElementById('confirm-text')!;
-const confirmYes = document.getElementById('btn-confirm-yes')!;
-const confirmNo = document.getElementById('btn-confirm-no')!;
-const workflowStatus = document.getElementById('workflow-status')!;
-const instrumentStateEl = document.getElementById('instrument-state')!;
-const progressBarsEl = document.getElementById('progress-bars')!;
-const exportBtn = document.getElementById('btn-export')!;
+const btnY = document.getElementById('btn-y')!;
+const btnN = document.getElementById('btn-n')!;
+const scopeStateEl = document.getElementById('scope-state')!;
+const anomalyLogEl = document.getElementById('anomaly-log')!;
+const progressEl = document.getElementById('progress')!;
+const sessionLogEl = document.getElementById('session-log')!;
+const wfStepsEl = document.getElementById('wf-steps')!;
+const sessionLabelEl = document.getElementById('session-label')!;
+const scopeLabelEl = document.getElementById('scope-label')!;
+const dotScope = document.getElementById('dot-scope')!;
+const btnExport = document.getElementById('btn-export')!;
+const btnClear = document.getElementById('btn-clear')!;
 
+// ── State ──
 const history: ChatTurn[] = [];
+const anomalies: DiagnoseResult[] = [];
+let backendOnline = false;
 
-function addMessage(role: 'user' | 'assistant' | 'system', text: string) {
+// ── Helpers ──
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function ts(): string {
+  return new Date().toLocaleTimeString('en-GB', { hour12: false });
+}
+
+function addMsg(role: 'user' | 'assistant' | 'system' | 'tool', text: string, tags?: string[]) {
   const div = document.createElement('div');
-  div.className = `message msg-${role}`;
+  div.className = 'msg';
+  const roleClass = `role-${role}`;
+  const roleLabel = role === 'user' ? 'YOU' : role === 'assistant' ? 'RHODA' : role === 'tool' ? 'TOOL' : 'SYS';
+  const tagHtml = (tags || []).map(t => {
+    const cls = t === 'READ' ? 'tag-read' : t === 'WRITE' ? 'tag-write' : t === 'anomaly' ? 'tag-anomaly' : t === 'rag' ? 'tag-rag' : t === 'workflow' ? 'tag-workflow' : 'tag-read';
+    return `<span class="msg-tag ${cls}">${esc(t)}</span>`;
+  }).join('');
 
-  const avatarText = role === 'user' ? '👤' : role === 'assistant' ? '🤖' : '⚠️';
-  const roleName = role === 'user' ? 'You' : role === 'assistant' ? 'Rhoda' : 'System';
+  const processed = text.replace(/⚠️\s*(.*)/g, '<span class="safety">⚠️ $1</span>');
 
   div.innerHTML = `
-    <div class="msg-avatar">${avatarText}</div>
-    <div class="msg-content">
-      <div class="msg-role">${roleName}</div>
-      ${text.split('\n').map(p => `<p>${escapeHtml(p)}</p>`).join('')}
+    <div class="msg-header">
+      <span class="ts">${ts()}</span>
+      <span class="role ${roleClass}">${roleLabel}</span>${tagHtml}
     </div>
+    <div class="msg-body">${processed}</div>
   `;
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function showConfirmation(prompt: string) {
+function showConfirm(prompt: string) {
   confirmText.textContent = prompt;
-  confirmBar.classList.add('visible');
+  confirmBanner.classList.add('active');
 }
 
-function hideConfirmation() {
-  confirmBar.classList.remove('visible');
+function hideConfirm() {
+  confirmBanner.classList.remove('active');
 }
 
-function updateInstrumentPanel() {
-  const state = getInstrumentState();
-  const ch1 = state.channels[1];
-  instrumentStateEl.innerHTML = `
-    <div class="state-row"><span class="state-label">CH1</span><span class="state-value">${ch1.enabled ? 'ON' : 'OFF'} ${ch1.coupling} ${ch1.scale_v_div}V/div</span></div>
-    <div class="state-row"><span class="state-label">Timebase</span><span class="state-value">${(state.horizontal.timebase_s_div * 1000).toFixed(2)} ms/div</span></div>
-    <div class="state-row"><span class="state-label">Trigger</span><span class="state-value">CH${state.trigger.source} ${state.trigger.slope} ${state.trigger.mode}</span></div>
-    <div class="state-row"><span class="state-label">Freq</span><span class="state-value">${state.measurement.frequency_hz ?? '—'} Hz</span></div>
-    <div class="state-row"><span class="state-label">Vpp</span><span class="state-value">${state.measurement.vpp_v ?? '—'} V</span></div>
+// ── Instrument panel ──
+function renderScopeState() {
+  const s = getInstrumentState();
+  const ch1 = s.channels[1];
+  const ch2 = s.channels[2];
+  const onOff = (v: boolean) => v ? '<span class="v v-on">ON</span>' : '<span class="v v-off">OFF</span>';
+
+  scopeStateEl.innerHTML = `
+    <span class="k">CH1</span>${onOff(ch1.enabled)}
+    <span class="k">CH1 scale</span><span class="v">${ch1.scale_v_div} V/div</span>
+    <span class="k">CH1 coupling</span><span class="v">${ch1.coupling}</span>
+    <span class="k">CH1 probe</span><span class="v">${ch1.probe_attenuation}</span>
+    <span class="k">CH2</span>${onOff(ch2.enabled)}
+    <span class="k">timebase</span><span class="v">${fmtTime(s.horizontal.timebase_s_div)}/div</span>
+    <span class="k">trigger</span><span class="v">CH${s.trigger.source} ${s.trigger.slope}</span>
+    <span class="k">trig mode</span><span class="v">${s.trigger.mode}</span>
+    <span class="k">trig level</span><span class="v">${s.trigger.level_v} V</span>
+    <span class="k">freq</span><span class="v">${s.measurement.frequency_hz != null ? s.measurement.frequency_hz + ' Hz' : '—'}</span>
+    <span class="k">Vpp</span><span class="v">${s.measurement.vpp_v != null ? s.measurement.vpp_v + ' V' : '—'}</span>
+    <span class="k">Vrms</span><span class="v">${s.measurement.vrms_v != null ? s.measurement.vrms_v + ' V' : '—'}</span>
   `;
 }
 
-function updateProgress() {
-  const progress = getProgress();
-  const scores = progress.topic_scores;
-  const topics = Object.entries(scores);
+function fmtTime(s: number): string {
+  if (s >= 1) return s + ' s';
+  if (s >= 0.001) return (s * 1000).toFixed(1) + ' ms';
+  if (s >= 0.000001) return (s * 1000000).toFixed(1) + ' µs';
+  return (s * 1000000000).toFixed(1) + ' ns';
+}
 
-  if (topics.length === 0) {
-    progressBarsEl.innerHTML = '<p style="font-size:11px;color:var(--muted)">Start a conversation to track progress.</p>';
+// ── Anomaly panel ──
+function renderAnomalies() {
+  if (anomalies.length === 0) {
+    anomalyLogEl.innerHTML = '<div style="font-size:10px;color:var(--dim)">no anomalies detected</div>';
     return;
   }
-
-  progressBarsEl.innerHTML = topics.map(([name, score]) => `
-    <div class="topic-bar">
-      <div class="label"><span>${name}</span><span>${score}%</span></div>
-      <div class="bar"><div class="fill" style="width:${Math.min(score, 100)}%"></div></div>
+  anomalyLogEl.innerHTML = anomalies.slice(-5).reverse().map(a => `
+    <div class="anomaly-entry">
+      ${a.unsafe_flag ? '<div class="anomaly-unsafe">⚠ SAFETY FLAG</div>' : ''}
+      <div class="anomaly-cause">${esc(a.probable_cause)}</div>
+      <div class="anomaly-conf">${(a.confidence * 100).toFixed(0)}% confidence · ${a.fix_steps.length} fix steps</div>
     </div>
   `).join('');
 }
 
-function updateWorkflowStatus() {
-  const wf = getActiveWorkflow();
-  if (!wf) {
-    workflowStatus.textContent = '';
+// ── Progress panel ──
+function renderProgress() {
+  const p = getProgress();
+  const scores = p.topic_scores;
+  const entries = Object.entries(scores);
+  if (entries.length === 0) {
+    progressEl.innerHTML = '<div style="font-size:10px;color:var(--dim)">no data yet — start asking questions</div>';
     return;
   }
-  workflowStatus.textContent = `📋 ${wf.title} — Step ${getStepIndex() + 1}/${getTotalSteps()}`;
+  progressEl.innerHTML = entries.map(([name, score]) => `
+    <div class="prog-row">
+      <div class="prog-label"><span>${esc(name)}</span><span>${score}%</span></div>
+      <div class="prog-bar"><div class="prog-fill" style="width:${Math.min(score as number, 100)}%"></div></div>
+    </div>
+  `).join('') + `<div style="font-size:10px;color:var(--dim);margin-top:6px">next: ${esc(p.recommended_next_topic)}</div>`;
 }
 
+// ── Session log panel ──
+function renderSessionLog() {
+  const logs = sessionLogger.getSessionLogs().slice(-30);
+  if (logs.length === 0) {
+    sessionLogEl.innerHTML = '<div style="font-size:10px;color:var(--dim)">empty</div>';
+    return;
+  }
+  sessionLogEl.innerHTML = logs.map(l => {
+    const t = l.timestamp.substring(11, 19);
+    const r = l.role[0].toUpperCase();
+    const cls = `slog-role-${r}`;
+    const content = l.tool_call ? `${l.tool_call.category} ${l.tool_call.name}` : l.content.substring(0, 60);
+    return `<div class="slog"><span class="slog-ts">${t}</span><span class="slog-role ${cls}">${r}</span><span class="slog-content">${esc(content)}</span></div>`;
+  }).join('');
+  sessionLogEl.scrollTop = sessionLogEl.scrollHeight;
+}
+
+// ── Workflow panel ──
+function renderWorkflow() {
+  const wf = getActiveWorkflow();
+  if (!wf) {
+    wfStepsEl.innerHTML = '';
+    return;
+  }
+  const idx = getStepIndex();
+  const total = getTotalSteps();
+  wfStepsEl.innerHTML = `<div style="font-size:10px;color:var(--cyan);margin:6px 0 4px">${esc(wf.title)} (${idx + 1}/${total})</div>` +
+    wf.steps.map((s, i) => {
+      const numCls = i === idx ? 'active' : '';
+      const txtCls = i < idx ? 'done' : i === idx ? 'active' : '';
+      return `<div class="wf-step"><span class="wf-num ${numCls}">${s.id}</span><span class="wf-text ${txtCls}">${esc(s.instruction)}</span></div>`;
+    }).join('');
+}
+
+// ── Backend probe ──
+async function probeBackend() {
+  try {
+    const r = await fetch('http://localhost:5001/api/health', { signal: AbortSignal.timeout(1500) });
+    if (r.ok) {
+      const data = await r.json();
+      backendOnline = true;
+      const mode = data.instrument || 'mock';
+      dotScope.className = mode === 'mock' ? 'dot dot-warn' : 'dot dot-on';
+      scopeLabelEl.textContent = `scope: ${mode}`;
+      return;
+    }
+  } catch {}
+  backendOnline = false;
+  dotScope.className = 'dot dot-off';
+  scopeLabelEl.textContent = 'scope: local mock';
+}
+
+// ── Instrument action detection ──
+function detectAction(text: string): { name: string; params: Record<string, unknown> } | null {
+  const l = text.toLowerCase();
+  if (/timebase|time.?base|time.?div/.test(l)) {
+    const m = l.match(/(\d+(?:\.\d+)?)\s*(?:ms|us|µs|ns|s)/);
+    if (m) {
+      let v = parseFloat(m[1]);
+      if (l.includes('ms')) v *= 0.001;
+      else if (l.includes('us') || l.includes('µs')) v *= 0.000001;
+      else if (l.includes('ns')) v *= 0.000000001;
+      return { name: 'set_timebase', params: { timebase_s_div: v } };
+    }
+  }
+  if (/vertical.?scale|v.?div|volts.?per/.test(l)) {
+    const m = l.match(/(\d+(?:\.\d+)?)\s*(?:mv|v)/);
+    if (m) {
+      let v = parseFloat(m[1]);
+      if (l.includes('mv')) v *= 0.001;
+      const ch = l.match(/ch(?:annel)?\s*(\d)/);
+      return { name: 'set_vertical_scale', params: { channel: ch ? parseInt(ch[1]) : 1, scale_v_div: v } };
+    }
+  }
+  if (/coupling.*(ac|dc)/i.test(l)) {
+    const coupling = /ac/i.test(l) ? 'AC' : 'DC';
+    const ch = l.match(/ch(?:annel)?\s*(\d)/);
+    return { name: 'set_channel_coupling', params: { channel: ch ? parseInt(ch[1]) : 1, coupling } };
+  }
+  if (/autoset|auto.?set/.test(l)) return { name: 'run_autoset', params: {} };
+  return null;
+}
+
+// ── Main send handler ──
 async function handleSend() {
   const text = inputEl.value.trim();
   if (!text) return;
-
   inputEl.value = '';
   sendBtn.disabled = true;
-  addMessage('user', text);
+
+  addMsg('user', text);
   sessionLogger.logUserInput(text);
 
   try {
-    // Check for confirmation responses
+    const lower = text.toLowerCase();
+
+    // Confirmation responses
     const pending = getPendingConfirmation();
     if (pending) {
-      const lower = text.toLowerCase();
       if (/yes|confirm|proceed|go ahead|allow|okay|ok|do it/.test(lower)) {
-        const result = confirmPending();
-        hideConfirmation();
-        const msg = `Done. ${JSON.stringify(result.result)}`;
-        addMessage('assistant', msg);
+        const r = confirmPending();
+        hideConfirm();
+        const msg = `parameter set: ${JSON.stringify(r.result)}`;
+        addMsg('tool', msg, ['WRITE']);
         sessionLogger.logAssistantResponse(msg);
         history.push({ role: 'user', content: text }, { role: 'model', content: msg });
-        updateInstrumentPanel();
+        refreshAll();
         sendBtn.disabled = false;
         return;
-      } else if (/no|cancel|deny|stop|don't/.test(lower)) {
+      }
+      if (/no|cancel|deny|stop|don't/.test(lower)) {
         denyPending();
-        hideConfirmation();
-        const msg = 'Alright, I cancelled that action.';
-        addMessage('assistant', msg);
+        hideConfirm();
+        addMsg('system', 'action denied by user');
+        history.push({ role: 'user', content: text }, { role: 'model', content: 'action denied' });
+        sendBtn.disabled = false;
+        return;
+      }
+    }
+
+    // Workflow step advancement
+    if (/next step|continue|done|move on|proceed/.test(lower) && getActiveWorkflow()) {
+      const nextStep = advanceStep();
+      if (nextStep) {
+        let msg = `[step ${nextStep.id}/${getTotalSteps()}] ${nextStep.instruction}\n${nextStep.detail}`;
+        if (nextStep.safetyCheck) msg += `\n⚠️ ${nextStep.safetyCheck}`;
+        addMsg('assistant', msg, ['workflow']);
         sessionLogger.logAssistantResponse(msg);
         history.push({ role: 'user', content: text }, { role: 'model', content: msg });
-        sendBtn.disabled = false;
-        return;
-      }
-    }
 
-    // Check for workflow commands
-    const lowerText = text.toLowerCase();
-    if (lowerText.includes('next step') || lowerText.includes('continue') || lowerText.includes('done with this step')) {
-      const wf = getActiveWorkflow();
-      if (wf) {
-        const nextStep = advanceStep();
-        if (nextStep) {
-          const msg = `Step ${nextStep.id} of ${getTotalSteps()}: ${nextStep.instruction}\n\n${nextStep.detail}${nextStep.safetyCheck ? '\n\n⚠️ Safety: ' + nextStep.safetyCheck : ''}`;
-          addMessage('assistant', msg);
-          sessionLogger.logAssistantResponse(msg);
-          history.push({ role: 'user', content: text }, { role: 'model', content: msg });
-
-          if (nextStep.instrumentAction) {
-            const result = executeFunction({ ...nextStep.instrumentAction, confirmed: false });
-            if (result.status === 'confirmation_required') {
-              showConfirmation(result.confirmation_prompt || 'Confirm this instrument change?');
-            }
+        if (nextStep.instrumentAction) {
+          const r = executeFunction({ ...nextStep.instrumentAction, confirmed: false });
+          if (r.status === 'confirmation_required') {
+            showConfirm(r.confirmation_prompt || 'confirm instrument change?');
+            addMsg('tool', `pending: ${r.confirmation_prompt}`, ['WRITE']);
           }
-        } else {
-          const msg = `Workflow "${wf.title}" completed! All steps done.`;
-          addMessage('system', msg);
-          sessionLogger.logSystemEvent(msg);
         }
-        updateWorkflowStatus();
-        updateInstrumentPanel();
-        sendBtn.disabled = false;
-        return;
+      } else {
+        addMsg('system', `workflow complete: ${getActiveWorkflow()?.title || 'done'}`, ['workflow']);
       }
-    }
-
-    // Check for anomaly/troubleshooting
-    if (/noise|noisy|clip|unstable|drift|alias|wrong|broken|fault|problem|issue|diagnos/.test(lowerText)) {
-      const diagnosis = await diagnoseTrace({ description: text });
-      let msg = `Diagnosis: ${diagnosis.probable_cause}\n\nFix steps:\n`;
-      msg += diagnosis.fix_steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
-      if (diagnosis.unsafe_flag) msg = '⚠️ SAFETY CONCERN\n\n' + msg;
-      addMessage('assistant', msg);
-      sessionLogger.logAssistantResponse(msg, 'troubleshooting');
-      history.push({ role: 'user', content: text }, { role: 'model', content: msg });
+      refreshAll();
       sendBtn.disabled = false;
       return;
     }
 
-    // RAG + instrument state + Gemini
-    const ragContext = getContextForQuery(text);
-    const instrState = JSON.stringify(getInstrumentState(), null, 1);
-    const wfContext = getWorkflowContext() || undefined;
-
-    const response = await askGemini(text, ragContext, instrState, history, wfContext);
-    addMessage('assistant', response);
-    sessionLogger.logAssistantResponse(response);
-    history.push({ role: 'user', content: text }, { role: 'model', content: response });
-    if (history.length > 40) history.splice(0, history.length - 40);
-
-    // Check if response implies a WRITE action
-    const writeMatch = response.match(/(?:set|change|adjust|switch|enable|disable|configure)\s+(?:the\s+)?(\w[\w\s]*?)(?:\s+to\s+|\s+from\s+)/i);
-    if (writeMatch) {
-      const action = detectInstrumentAction(response);
-      if (action) {
-        const result = executeFunction(action);
-        if (result.status === 'confirmation_required') {
-          showConfirmation(result.confirmation_prompt || 'Confirm this instrument change?');
+    // Workflow start trigger
+    if (/walk me through|guide me|help me measure|start workflow/.test(lower)) {
+      let wfId: string | null = null;
+      if (/sine|1.?khz|measure|frequency/.test(lower)) wfId = 'measure-1khz-sine';
+      if (/safety|overvoltage|overload|danger/.test(lower)) wfId = 'safety-overvoltage';
+      if (wfId) {
+        const wf = startWorkflow(wfId);
+        if (wf) {
+          const step = getCurrentStep()!;
+          let msg = `starting workflow: ${wf.title}\n\n[step 1/${getTotalSteps()}] ${step.instruction}\n${step.detail}`;
+          if (step.safetyCheck) msg += `\n⚠️ ${step.safetyCheck}`;
+          addMsg('assistant', msg, ['workflow']);
+          sessionLogger.logAssistantResponse(msg);
+          history.push({ role: 'user', content: text }, { role: 'model', content: msg });
+          refreshAll();
+          sendBtn.disabled = false;
+          return;
         }
       }
     }
 
-    updateInstrumentPanel();
-    updateProgress();
-    updateWorkflowStatus();
+    // Anomaly detection
+    if (/noise|noisy|clip|clipped|unstable|drift|alias|wrong|broken|fault|problem|issue|diagnos|overvoltage|overload/.test(lower)) {
+      addMsg('system', 'running anomaly detection...', ['anomaly']);
+      const diag = await diagnoseTrace({ description: text });
+      anomalies.push(diag);
+
+      let msg = diag.probable_cause;
+      if (diag.unsafe_flag) msg = '⚠️ SAFETY CONCERN: ' + msg;
+      msg += '\n\nfix steps:';
+      diag.fix_steps.forEach((s, i) => { msg += `\n  ${i + 1}. ${s}`; });
+      msg += `\n\nconfidence: ${(diag.confidence * 100).toFixed(0)}%`;
+
+      addMsg('assistant', msg, ['anomaly']);
+      sessionLogger.logAssistantResponse(msg, 'troubleshooting');
+      history.push({ role: 'user', content: text }, { role: 'model', content: msg });
+      refreshAll();
+      sendBtn.disabled = false;
+      return;
+    }
+
+    // Standard RAG + LLM flow
+    const ragContext = getContextForQuery(text);
+    if (ragContext) {
+      addMsg('system', `retrieved ${ragContext.split('---').length} context chunks`, ['rag']);
+    }
+
+    const instrState = JSON.stringify(getInstrumentState(), null, 1);
+    const wfContext = getWorkflowContext() || undefined;
+    const response = await askGemini(text, ragContext, instrState, history, wfContext);
+
+    addMsg('assistant', response);
+    sessionLogger.logAssistantResponse(response);
+    history.push({ role: 'user', content: text }, { role: 'model', content: response });
+    if (history.length > 40) history.splice(0, history.length - 40);
+
+    // Check for instrument action in response
+    const writeMatch = response.match(/(?:set|change|adjust|switch|enable|disable|configure)\s+(?:the\s+)?(\w[\w\s]*?)(?:\s+to\s+|\s+from\s+)/i);
+    if (writeMatch) {
+      const action = detectAction(response);
+      if (action) {
+        const r = executeFunction(action);
+        if (r.status === 'confirmation_required') {
+          showConfirm(r.confirmation_prompt || 'confirm instrument change?');
+          addMsg('tool', `pending: ${r.confirmation_prompt}`, ['WRITE']);
+        }
+      }
+    }
+
+    refreshAll();
   } catch (err) {
-    addMessage('system', `Error: ${(err as Error).message}`);
+    addMsg('system', `error: ${(err as Error).message}`);
   }
   sendBtn.disabled = false;
   inputEl.focus();
 }
 
-function detectInstrumentAction(response: string): { name: string; params: Record<string, unknown> } | null {
-  const lower = response.toLowerCase();
-  if (/timebase|time.?base|time.?div/.test(lower)) {
-    const numMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:ms|us|µs|ns|s)/);
-    if (numMatch) {
-      let val = parseFloat(numMatch[1]);
-      if (lower.includes('ms')) val *= 0.001;
-      else if (lower.includes('us') || lower.includes('µs')) val *= 0.000001;
-      else if (lower.includes('ns')) val *= 0.000000001;
-      return { name: 'set_timebase', params: { timebase_s_div: val } };
-    }
-  }
-  if (/vertical.?scale|v.?div|volts.?per/.test(lower)) {
-    const numMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:mv|v)/);
-    if (numMatch) {
-      let val = parseFloat(numMatch[1]);
-      if (lower.includes('mv')) val *= 0.001;
-      const chMatch = lower.match(/ch(?:annel)?\s*(\d)/);
-      return { name: 'set_vertical_scale', params: { channel: chMatch ? parseInt(chMatch[1]) : 1, scale_v_div: val } };
-    }
-  }
-  if (/coupling.*(ac|dc)/i.test(lower)) {
-    const coupling = /ac/i.test(lower) ? 'AC' : 'DC';
-    const chMatch = lower.match(/ch(?:annel)?\s*(\d)/);
-    return { name: 'set_channel_coupling', params: { channel: chMatch ? parseInt(chMatch[1]) : 1, coupling } };
-  }
-  if (/autoset|auto.?set/.test(lower)) {
-    return { name: 'run_autoset', params: {} };
-  }
-  return null;
+function refreshAll() {
+  renderScopeState();
+  renderAnomalies();
+  renderProgress();
+  renderSessionLog();
+  renderWorkflow();
 }
 
-// Event listeners
+// ── Event wiring ──
 sendBtn.addEventListener('click', handleSend);
-inputEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    handleSend();
-  }
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
 });
 
-confirmYes.addEventListener('click', () => {
-  const result = confirmPending();
-  hideConfirmation();
-  const msg = `Confirmed. ${JSON.stringify(result.result)}`;
-  addMessage('assistant', msg);
-  sessionLogger.logAssistantResponse(msg);
-  updateInstrumentPanel();
+btnY.addEventListener('click', () => {
+  const r = confirmPending();
+  hideConfirm();
+  addMsg('tool', `confirmed: ${JSON.stringify(r.result)}`, ['WRITE']);
+  sessionLogger.logAssistantResponse(`confirmed: ${JSON.stringify(r.result)}`);
+  refreshAll();
 });
 
-confirmNo.addEventListener('click', () => {
+btnN.addEventListener('click', () => {
   denyPending();
-  hideConfirmation();
-  addMessage('assistant', 'Action cancelled.');
-  sessionLogger.logAssistantResponse('Action cancelled.');
+  hideConfirm();
+  addMsg('system', 'action denied');
+  refreshAll();
 });
 
-// Workflow buttons
-document.querySelectorAll('.workflow-btn').forEach(btn => {
+btnExport.addEventListener('click', () => {
+  const json = sessionLogger.exportJSON();
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `rhoda-${sessionLogger.getSessionId()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+btnClear.addEventListener('click', () => {
+  sessionLogger.resetSession();
+  history.length = 0;
+  anomalies.length = 0;
+  stopWorkflow();
+  messagesEl.innerHTML = '';
+  refreshAll();
+  addMsg('system', `new session: ${sessionLogger.getSessionId()}`);
+});
+
+document.querySelectorAll('.wf-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const id = (btn as HTMLElement).dataset.workflow;
+    const id = (btn as HTMLElement).dataset.wf;
     if (!id) return;
     const wf = startWorkflow(id);
     if (!wf) return;
-
-    addMessage('system', `Starting workflow: ${wf.title}\n${wf.description}`);
-    const step = getCurrentStep();
-    if (step) {
-      const msg = `Step ${step.id} of ${getTotalSteps()}: ${step.instruction}\n\n${step.detail}${step.safetyCheck ? '\n\n⚠️ Safety: ' + step.safetyCheck : ''}`;
-      addMessage('assistant', msg);
-      sessionLogger.logAssistantResponse(msg);
-    }
-    updateWorkflowStatus();
+    const step = getCurrentStep()!;
+    let msg = `starting workflow: ${wf.title}\n\n[step 1/${getTotalSteps()}] ${step.instruction}\n${step.detail}`;
+    if (step.safetyCheck) msg += `\n⚠️ ${step.safetyCheck}`;
+    addMsg('assistant', msg, ['workflow']);
+    sessionLogger.logAssistantResponse(msg);
+    refreshAll();
   });
 });
 
-// Export transcript
-exportBtn.addEventListener('click', () => {
-  const json = sessionLogger.exportJSON();
-  const blob = new Blob([json], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `rhoda-transcript-${sessionLogger.getSessionId()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+// Section collapse toggle
+document.querySelectorAll('.panel-section h3').forEach(h => {
+  h.addEventListener('click', () => {
+    h.parentElement!.classList.toggle('collapsed');
+  });
 });
 
-// Init
-updateInstrumentPanel();
-updateProgress();
-addMessage('assistant', 'Hello! I\'m Rhoda, your virtual lab assistant for Rohde & Schwarz oscilloscopes. Ask me about measurement procedures, safety guidelines, or troubleshooting — or start a guided workflow from the sidebar.');
+// ── Init ──
+sessionLabelEl.textContent = `session: ${sessionLogger.getSessionId().slice(-8)}`;
+
+// Load previous conversation from session storage
+const prevLogs = sessionLogger.getSessionLogs();
+for (const l of prevLogs) {
+  if (l.role === 'user') {
+    addMsg('user', l.content);
+  } else if (l.role === 'assistant') {
+    const tags: string[] = [];
+    if (l.topic === 'troubleshooting') tags.push('anomaly');
+    if (l.tool_call) tags.push(l.tool_call.category);
+    addMsg('assistant', l.content, tags);
+  } else if (l.role === 'tool' && l.tool_call) {
+    addMsg('tool', `${l.tool_call.category} ${l.tool_call.name}`, [l.tool_call.category]);
+  }
+}
+
+if (prevLogs.length > 0) {
+  addMsg('system', `restored ${prevLogs.length} events from previous session`);
+  // Rebuild history for Gemini context
+  for (const l of prevLogs) {
+    if (l.role === 'user') history.push({ role: 'user', content: l.content });
+    if (l.role === 'assistant') history.push({ role: 'model', content: l.content });
+  }
+  if (history.length > 40) history.splice(0, history.length - 40);
+}
+
+probeBackend();
+refreshAll();
 inputEl.focus();
