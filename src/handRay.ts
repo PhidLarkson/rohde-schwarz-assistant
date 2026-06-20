@@ -2,162 +2,102 @@ import { createSystem } from "@iwsdk/core";
 import * as THREE from 'three';
 
 /**
- * HandRaySystem adds visual pointer rays from hands/controllers
- * to help users see what they're pointing at and enable UI selection.
+ * HandRaySystem — uses IWSDK's built-in xrManager to access XR frame,
+ * session, and reference space. Renders pointer rays and performs
+ * raycasting against dashboard and avatar meshes.
+ *
+ * IWSDK already renders its own RayPointer via MultiPointer, but we add
+ * raycasting against our custom interactables (dashboard, Rhoda avatar)
+ * and track which object is under the pointer for selectstart handling.
  */
 export class HandRaySystem extends createSystem() {
-  private leftRay: THREE.Mesh | null = null;
-  private rightRay: THREE.Mesh | null = null;
-  private leftMaterial!: THREE.MeshBasicMaterial;
-  private rightMaterial!: THREE.MeshBasicMaterial;
   private raycaster = new THREE.Raycaster();
-  private rayLength = 3;
-  private hitDot: THREE.Mesh | null = null;
+  private rayLength = 5;
+  private tmpOrigin = new THREE.Vector3();
+  private tmpDir = new THREE.Vector3();
+  private tmpQuat = new THREE.Quaternion();
 
   init() {
-    const makeRayMesh = () => {
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0x00ffff,
-        transparent: true,
-        opacity: 0.5,
-        depthTest: false,
-        side: THREE.DoubleSide,
-      });
-      const geo = new THREE.CylinderGeometry(0.002, 0.0005, this.rayLength, 6, 1, true);
-      geo.rotateX(Math.PI / 2);
-      geo.translate(0, 0, -this.rayLength / 2);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.renderOrder = 999;
-      mesh.frustumCulled = false;
-      mesh.visible = false;
-      return { mesh, mat };
-    };
-
-    const left = makeRayMesh();
-    const right = makeRayMesh();
-    this.leftRay = left.mesh;
-    this.rightRay = right.mesh;
-    this.leftMaterial = left.mat;
-    this.rightMaterial = right.mat;
-
-    const dotGeo = new THREE.SphereGeometry(0.008, 8, 8);
-    const dotMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, depthTest: false });
-    this.hitDot = new THREE.Mesh(dotGeo, dotMat);
-    this.hitDot.visible = false;
-    this.hitDot.renderOrder = 1000;
-    this.scene.add(this.hitDot);
-
-    this.scene.add(this.leftRay);
-    this.scene.add(this.rightRay);
-
-    console.log('🎯 Hand ray system initialized');
+    this.raycaster.far = this.rayLength;
+    console.log('🎯 HandRaySystem initialized (using IWSDK xrManager)');
   }
 
   update(_delta: number, _time: number) {
-    const session = (this.world as any).xrSession;
+    // Use IWSDK's xrManager to get session, frame, reference space
+    const xrManager = this.xrManager;
+    if (!xrManager) return;
+
+    const session = xrManager.getSession?.();
     if (!session || !session.inputSources) {
-      if (this.leftRay) this.leftRay.visible = false;
-      if (this.rightRay) this.rightRay.visible = false;
-      if (this.hitDot) this.hitDot.visible = false;
+      (this.world as any).lastDashboardIntersect = null;
+      (this.world as any).lastRhodeSchwarzIntersect = null;
       return;
     }
 
-    let leftHandFound = false;
-    let rightHandFound = false;
-    let anyHit = false;
+    const frame = xrManager.getFrame?.();
+    const refSpace = xrManager.getReferenceSpace?.();
+    if (!frame || !refSpace) return;
+
+    let foundHit = false;
 
     for (const inputSource of session.inputSources) {
-      const handedness = inputSource.handedness;
-      if (handedness !== 'left' && handedness !== 'right') continue;
+      if (inputSource.handedness !== 'left' && inputSource.handedness !== 'right') continue;
 
-      const ray = handedness === 'left' ? this.leftRay : this.rightRay;
-      const mat = handedness === 'left' ? this.leftMaterial : this.rightMaterial;
-      if (!ray || !mat) continue;
-
-      // Prefer targetRaySpace (pointer direction) over gripSpace
-      const space = inputSource.targetRaySpace || inputSource.gripSpace;
+      // Prefer targetRaySpace for pointer direction
+      const space = inputSource.targetRaySpace;
       if (!space) continue;
 
-      const frame = (this.world as any).xrFrame;
-      const referenceSpace = (this.world as any).xrReferenceSpace;
-      if (!frame || !referenceSpace) continue;
-
+      let pose: XRPose | undefined;
       try {
-        const pose = frame.getPose(space, referenceSpace);
-        if (!pose) continue;
+        pose = frame.getPose(space, refSpace) ?? undefined;
+      } catch {
+        continue;
+      }
+      if (!pose) continue;
 
-        const { position, orientation } = pose.transform;
+      const { position, orientation } = pose.transform;
+      this.tmpOrigin.set(position.x, position.y, position.z);
+      this.tmpQuat.set(orientation.x, orientation.y, orientation.z, orientation.w);
+      this.tmpDir.set(0, 0, -1).applyQuaternion(this.tmpQuat).normalize();
 
-        ray.position.set(position.x, position.y, position.z);
-        ray.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
-        ray.visible = true;
+      this.raycaster.set(this.tmpOrigin, this.tmpDir);
 
-        if (handedness === 'left') leftHandFound = true;
-        else rightHandFound = true;
+      // Collect interactables
+      const targets: THREE.Object3D[] = [];
+      const dashboardAnchor = (this.world as any).dashboardAnchor;
+      if (dashboardAnchor && dashboardAnchor.visible) targets.push(dashboardAnchor);
+      const rsMesh = (this.world as any).rhodeSchwarzMesh;
+      if (rsMesh) targets.push(rsMesh);
 
-        const origin = new THREE.Vector3(position.x, position.y, position.z);
-        const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(ray.quaternion).normalize();
-        this.raycaster.set(origin, direction);
-        this.raycaster.far = this.rayLength;
+      if (targets.length === 0) continue;
 
-        const interactables: THREE.Object3D[] = [];
+      const hits = this.raycaster.intersectObjects(targets, true);
+      if (hits.length > 0) {
+        const hit = hits[0];
+        foundHit = true;
 
-        const dashboardAnchor = (this.world as any).dashboardAnchor;
-        if (dashboardAnchor && dashboardAnchor.visible) {
-          interactables.push(dashboardAnchor);
+        if (hit.object.userData.isDashboard) {
+          (this.world as any).lastDashboardIntersect = hit;
+          (this.world as any).lastRhodeSchwarzIntersect = null;
+        } else if (hit.object.userData.interactable) {
+          (this.world as any).lastRhodeSchwarzIntersect = hit;
+          (this.world as any).lastDashboardIntersect = null;
         }
-
-        const rsMesh = (this.world as any).rhodeSchwarzMesh;
-        if (rsMesh) interactables.push(rsMesh);
-
-        if (interactables.length > 0) {
-          const intersects = this.raycaster.intersectObjects(interactables, true);
-          if (intersects.length > 0) {
-            const hit = intersects[0];
-            anyHit = true;
-
-            if (this.hitDot) {
-              this.hitDot.position.copy(hit.point);
-              this.hitDot.visible = true;
-            }
-
-            if (hit.object.userData.isDashboard) {
-              mat.color.set(0x00ff00);
-              mat.opacity = 0.8;
-              (this.world as any).lastDashboardIntersect = hit;
-              (this.world as any).lastRhodeSchwarzIntersect = null;
-            } else if (hit.object.userData.interactable) {
-              mat.color.set(0xffff00);
-              mat.opacity = 0.8;
-              (this.world as any).lastRhodeSchwarzIntersect = hit;
-              (this.world as any).lastDashboardIntersect = null;
-            }
-          } else {
-            mat.color.set(0x00ffff);
-            mat.opacity = 0.5;
-            (this.world as any).lastDashboardIntersect = null;
-            (this.world as any).lastRhodeSchwarzIntersect = null;
-          }
-        }
-      } catch (err) {
-        // silently skip frame errors
       }
     }
 
-    if (!leftHandFound && this.leftRay) this.leftRay.visible = false;
-    if (!rightHandFound && this.rightRay) this.rightRay.visible = false;
-    if (!anyHit && this.hitDot) this.hitDot.visible = false;
+    if (!foundHit) {
+      (this.world as any).lastDashboardIntersect = null;
+      (this.world as any).lastRhodeSchwarzIntersect = null;
+    }
   }
 
   public static handleSelect(world: any) {
-    const intersect = (world as any).lastDashboardIntersect;
+    const intersect = world.lastDashboardIntersect;
     if (!intersect || !intersect.uv) return;
 
-    const uv = intersect.uv;
-    const x = uv.x;
-    const y = 1 - uv.y;
-
-    console.log(`🎯 Dashboard hit at UV: ${x.toFixed(2)}, ${y.toFixed(2)}`);
+    const x = intersect.uv.x;
+    const y = 1 - intersect.uv.y;
 
     const buttonIds = [
       'btn-talk', 'btn-lang', 'btn-identify', 'btn-summon',
@@ -167,7 +107,7 @@ export class HandRaySystem extends createSystem() {
     let root: Element | null = null;
     try {
       root = document.querySelector('.panel') || document.querySelector('[class*="panel"]') || document.body;
-    } catch (_) {
+    } catch {
       root = document.body;
     }
     if (!root) return;
@@ -181,16 +121,10 @@ export class HandRaySystem extends createSystem() {
       if (!el) continue;
       const rect = el.getBoundingClientRect();
       if (clickX >= rect.left && clickX <= rect.right &&
-        clickY >= rect.top && clickY <= rect.bottom) {
-        console.log(`🖱️ Virtual click on #${id}`);
+          clickY >= rect.top && clickY <= rect.bottom) {
         el.click();
         return;
       }
     }
-  }
-
-  cleanup() {
-    if (this.leftRay) this.scene.remove(this.leftRay);
-    if (this.rightRay) this.scene.remove(this.rightRay);
   }
 }
