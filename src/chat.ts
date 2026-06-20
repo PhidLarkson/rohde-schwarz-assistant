@@ -1,34 +1,34 @@
 import { askGemini, type ChatTurn } from './genai';
 import { getContextForQuery } from './rag';
-import {
-  executeFunction, getInstrumentState, getPendingConfirmation,
-  confirmPending, denyPending, readStateRemote,
-} from './instrument';
+import { getPendingConfirmation, confirmPending, denyPending } from './instrument';
 import { sessionLogger } from './session';
 import { diagnoseTrace, type DiagnoseResult } from './anomaly';
 import { getProgress } from './progress';
 import {
   startWorkflow, getActiveWorkflow, getCurrentStep,
   advanceStep, getStepIndex, getTotalSteps, stopWorkflow,
-  getWorkflowContext, getAvailableWorkflows,
+  getWorkflowContext,
 } from './workflows';
 
-// ── DOM refs ──
+const BACKEND = 'http://localhost:5001';
+
+// ── DOM ──
 const messagesEl = document.getElementById('messages')!;
 const inputEl = document.getElementById('input') as HTMLInputElement;
 const sendBtn = document.getElementById('send') as HTMLButtonElement;
-const confirmBanner = document.getElementById('confirm-banner')!;
+const confirmBanner = document.getElementById('confirm-bar')!;
 const confirmText = document.getElementById('confirm-text')!;
 const btnY = document.getElementById('btn-y')!;
 const btnN = document.getElementById('btn-n')!;
-const scopeStateEl = document.getElementById('scope-state')!;
-const anomalyLogEl = document.getElementById('anomaly-log')!;
-const progressEl = document.getElementById('progress')!;
-const sessionLogEl = document.getElementById('session-log')!;
+const scopePanel = document.getElementById('scope-panel')!;
+const anomPanel = document.getElementById('anom-panel')!;
+const progPanel = document.getElementById('prog-panel')!;
+const slogPanel = document.getElementById('slog-panel')!;
 const wfStepsEl = document.getElementById('wf-steps')!;
-const sessionLabelEl = document.getElementById('session-label')!;
-const scopeLabelEl = document.getElementById('scope-label')!;
-const dotScope = document.getElementById('dot-scope')!;
+const lblBe = document.getElementById('lbl-be')!;
+const dotBe = document.getElementById('dot-be')!;
+const lblHw = document.getElementById('lbl-hw')!;
+const dotHw = document.getElementById('dot-hw')!;
 const btnExport = document.getElementById('btn-export')!;
 const btnClear = document.getElementById('btn-clear')!;
 
@@ -36,164 +36,206 @@ const btnClear = document.getElementById('btn-clear')!;
 const history: ChatTurn[] = [];
 const anomalies: DiagnoseResult[] = [];
 let backendOnline = false;
+let instrumentMode = 'offline';
+let lastScopeState: Record<string, any> | null = null;
+let pendingConfirmationId: string | null = null;
+let pendingConfirmationPath: string | null = null;
+let pendingConfirmationValue: any = null;
 
 // ── Helpers ──
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
-
-function ts(): string {
+function now(): string {
   return new Date().toLocaleTimeString('en-GB', { hour12: false });
 }
 
 function addMsg(role: 'user' | 'assistant' | 'system' | 'tool', text: string, tags?: string[]) {
   const div = document.createElement('div');
   div.className = 'msg';
-  const roleClass = `role-${role}`;
-  const roleLabel = role === 'user' ? 'YOU' : role === 'assistant' ? 'RHODA' : role === 'tool' ? 'TOOL' : 'SYS';
+  const rl = role === 'user' ? 'YOU' : role === 'assistant' ? 'RHODA' : role === 'tool' ? 'INSTR' : 'SYS';
   const tagHtml = (tags || []).map(t => {
-    const cls = t === 'READ' ? 'tag-read' : t === 'WRITE' ? 'tag-write' : t === 'anomaly' ? 'tag-anomaly' : t === 'rag' ? 'tag-rag' : t === 'workflow' ? 'tag-workflow' : 'tag-read';
-    return `<span class="msg-tag ${cls}">${esc(t)}</span>`;
+    const c = t === 'READ' ? 'tag-read' : t === 'WRITE' ? 'tag-write' : t === 'anomaly' ? 'tag-anomaly' : t === 'rag' ? 'tag-rag' : 'tag-wf';
+    return `<span class="tag ${c}">${esc(t)}</span>`;
   }).join('');
-
-  const processed = text.replace(/⚠️\s*(.*)/g, '<span class="safety">⚠️ $1</span>');
-
-  div.innerHTML = `
-    <div class="msg-header">
-      <span class="ts">${ts()}</span>
-      <span class="role ${roleClass}">${roleLabel}</span>${tagHtml}
-    </div>
-    <div class="msg-body">${processed}</div>
-  `;
+  const body = text.replace(/⚠️\s*(.*)/g, '<span class="sf">⚠️ $1</span>');
+  div.innerHTML = `<div class="msg-h"><span class="ts">${now()}</span><span class="role role-${role}">${rl}</span>${tagHtml}</div><div class="msg-body">${body}</div>`;
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function showConfirm(prompt: string) {
-  confirmText.textContent = prompt;
-  confirmBanner.classList.add('active');
+// ── Backend communication ──
+async function fetchJSON(url: string, opts?: RequestInit): Promise<any> {
+  const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(5000) });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
 }
 
-function hideConfirm() {
-  confirmBanner.classList.remove('active');
+async function probeBackend() {
+  try {
+    const data = await fetchJSON(`${BACKEND}/api/health`);
+    backendOnline = true;
+    instrumentMode = data.instrument || 'mock';
+    dotBe.className = 'dot dot-on';
+    lblBe.textContent = 'backend: online';
+    if (instrumentMode === 'mock') {
+      dotHw.className = 'dot dot-warn';
+      lblHw.textContent = 'instrument: simulator';
+    } else {
+      dotHw.className = 'dot dot-on';
+      lblHw.textContent = `instrument: ${instrumentMode}`;
+    }
+  } catch {
+    backendOnline = false;
+    instrumentMode = 'offline';
+    dotBe.className = 'dot dot-err';
+    lblBe.textContent = 'backend: offline';
+    dotHw.className = 'dot dot-off';
+    lblHw.textContent = 'instrument: not available';
+  }
 }
 
-// ── Instrument panel ──
-function renderScopeState() {
-  const s = getInstrumentState();
-  const ch1 = s.channels[1];
-  const ch2 = s.channels[2];
-  const onOff = (v: boolean) => v ? '<span class="v v-on">ON</span>' : '<span class="v v-off">OFF</span>';
+async function fetchScopeState() {
+  if (!backendOnline) {
+    lastScopeState = null;
+    return;
+  }
+  try {
+    const data = await fetchJSON(`${BACKEND}/api/instrument/state?scope=all`);
+    if (data.ok) lastScopeState = data.result;
+    else lastScopeState = null;
+  } catch {
+    lastScopeState = null;
+  }
+}
 
-  scopeStateEl.innerHTML = `
-    <span class="k">CH1</span>${onOff(ch1.enabled)}
-    <span class="k">CH1 scale</span><span class="v">${ch1.scale_v_div} V/div</span>
-    <span class="k">CH1 coupling</span><span class="v">${ch1.coupling}</span>
-    <span class="k">CH1 probe</span><span class="v">${ch1.probe_attenuation}</span>
-    <span class="k">CH2</span>${onOff(ch2.enabled)}
-    <span class="k">timebase</span><span class="v">${fmtTime(s.horizontal.timebase_s_div)}/div</span>
-    <span class="k">trigger</span><span class="v">CH${s.trigger.source} ${s.trigger.slope}</span>
-    <span class="k">trig mode</span><span class="v">${s.trigger.mode}</span>
-    <span class="k">trig level</span><span class="v">${s.trigger.level_v} V</span>
-    <span class="k">freq</span><span class="v">${s.measurement.frequency_hz != null ? s.measurement.frequency_hz + ' Hz' : '—'}</span>
-    <span class="k">Vpp</span><span class="v">${s.measurement.vpp_v != null ? s.measurement.vpp_v + ' V' : '—'}</span>
-    <span class="k">Vrms</span><span class="v">${s.measurement.vrms_v != null ? s.measurement.vrms_v + ' V' : '—'}</span>
-  `;
+async function sendInstrumentSet(path: string, value: any, confirmed: boolean, confirmationId?: string): Promise<any> {
+  return fetchJSON(`${BACKEND}/api/instrument/set`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, value, confirmed, confirmationId }),
+  });
+}
+
+async function sendInstrumentConfirm(path: string, value: any, confirmationId: string): Promise<any> {
+  return fetchJSON(`${BACKEND}/api/instrument/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, value, confirmationId }),
+  });
+}
+
+async function sendMeasurement(type: string, source?: string): Promise<any> {
+  return fetchJSON(`${BACKEND}/api/instrument/measure`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ measurementType: type, source: source || 'CH1', confirmed: true, confirmationId: 'direct' }),
+  });
+}
+
+// ── Render panels ──
+function renderScope() {
+  if (!backendOnline) {
+    scopePanel.innerHTML = '<div class="scope-disconnected">backend offline — start server with: python server/app.py</div>';
+    return;
+  }
+  if (!lastScopeState) {
+    scopePanel.innerHTML = '<div class="scope-disconnected">no instrument data</div>';
+    return;
+  }
+  const s = lastScopeState;
+  const rows: string[] = [];
+
+  function row(k: string, v: string, cls = '') {
+    rows.push(`<span class="k">${k}</span><span class="v ${cls}">${v}</span>`);
+  }
+
+  if (s.instrument_id) row('id', s.instrument_id.substring(0, 30));
+  if (s.acquisition_state) row('acq', s.acquisition_state);
+  if (s.timebase_scale != null) row('timebase', fmtTime(s.timebase_scale) + '/div');
+
+  const channels = s.channels || {};
+  for (const ch of [1, 2, 3, 4]) {
+    const c = channels[ch] || channels[String(ch)];
+    if (!c) continue;
+    const en = c.enabled === true || c.enabled === 'ON' || c.enabled === '1';
+    if (!en && ch > 2) continue;
+    row(`CH${ch}`, en ? 'ON' : 'OFF', en ? 'v-on' : 'v-off');
+    if (en) {
+      row(`CH${ch} scale`, (c.vertical_scale ?? c.scale ?? '?') + ' V/div');
+      if (c.coupling) row(`CH${ch} coup`, c.coupling);
+    }
+  }
+
+  const trig = s.trigger || {};
+  if (trig.source) row('trig src', trig.source);
+  if (trig.level != null) row('trig lvl', trig.level + ' V');
+  if (trig.mode) row('trig mode', trig.mode);
+  if (trig.edge) row('trig edge', trig.edge);
+
+  scopePanel.innerHTML = `<div class="sg">${rows.join('')}</div>`;
 }
 
 function fmtTime(s: number): string {
   if (s >= 1) return s + ' s';
-  if (s >= 0.001) return (s * 1000).toFixed(1) + ' ms';
+  if (s >= 0.001) return (s * 1000).toFixed(2) + ' ms';
   if (s >= 0.000001) return (s * 1000000).toFixed(1) + ' µs';
   return (s * 1000000000).toFixed(1) + ' ns';
 }
 
-// ── Anomaly panel ──
 function renderAnomalies() {
-  if (anomalies.length === 0) {
-    anomalyLogEl.innerHTML = '<div style="font-size:10px;color:var(--dim)">no anomalies detected</div>';
-    return;
-  }
-  anomalyLogEl.innerHTML = anomalies.slice(-5).reverse().map(a => `
-    <div class="anomaly-entry">
-      ${a.unsafe_flag ? '<div class="anomaly-unsafe">⚠ SAFETY FLAG</div>' : ''}
-      <div class="anomaly-cause">${esc(a.probable_cause)}</div>
-      <div class="anomaly-conf">${(a.confidence * 100).toFixed(0)}% confidence · ${a.fix_steps.length} fix steps</div>
-    </div>
-  `).join('');
+  if (anomalies.length === 0) { anomPanel.innerHTML = '<div style="font-size:10px;color:var(--dim)">none</div>'; return; }
+  anomPanel.innerHTML = anomalies.slice(-5).reverse().map(a => `
+    <div class="anom">
+      ${a.unsafe_flag ? '<div class="anom-unsafe">⚠ SAFETY FLAG</div>' : ''}
+      <div class="anom-cause">${esc(a.probable_cause)}</div>
+      <div class="anom-meta">${(a.confidence * 100).toFixed(0)}% · ${a.fix_steps.length} steps</div>
+    </div>`).join('');
 }
 
-// ── Progress panel ──
 function renderProgress() {
   const p = getProgress();
-  const scores = p.topic_scores;
-  const entries = Object.entries(scores);
-  if (entries.length === 0) {
-    progressEl.innerHTML = '<div style="font-size:10px;color:var(--dim)">no data yet — start asking questions</div>';
-    return;
-  }
-  progressEl.innerHTML = entries.map(([name, score]) => `
-    <div class="prog-row">
-      <div class="prog-label"><span>${esc(name)}</span><span>${score}%</span></div>
-      <div class="prog-bar"><div class="prog-fill" style="width:${Math.min(score as number, 100)}%"></div></div>
-    </div>
-  `).join('') + `<div style="font-size:10px;color:var(--dim);margin-top:6px">next: ${esc(p.recommended_next_topic)}</div>`;
+  const entries = Object.entries(p.topic_scores);
+  if (entries.length === 0) { progPanel.innerHTML = '<div style="font-size:10px;color:var(--dim)">ask questions to build progress</div>'; return; }
+  progPanel.innerHTML = entries.map(([n, s]) => `<div class="pr"><div class="pr-l"><span>${esc(n)}</span><span>${s}%</span></div><div class="pr-b"><div class="pr-f" style="width:${Math.min(s as number, 100)}%"></div></div></div>`).join('')
+    + `<div style="font-size:9px;color:var(--dim);margin-top:4px">next → ${esc(p.recommended_next_topic)}</div>`;
 }
 
-// ── Session log panel ──
 function renderSessionLog() {
-  const logs = sessionLogger.getSessionLogs().slice(-30);
-  if (logs.length === 0) {
-    sessionLogEl.innerHTML = '<div style="font-size:10px;color:var(--dim)">empty</div>';
-    return;
-  }
-  sessionLogEl.innerHTML = logs.map(l => {
+  const logs = sessionLogger.getSessionLogs().slice(-40);
+  if (logs.length === 0) { slogPanel.innerHTML = '<div style="font-size:9px;color:var(--dim)">empty</div>'; return; }
+  slogPanel.innerHTML = logs.map(l => {
     const t = l.timestamp.substring(11, 19);
     const r = l.role[0].toUpperCase();
-    const cls = `slog-role-${r}`;
-    const content = l.tool_call ? `${l.tool_call.category} ${l.tool_call.name}` : l.content.substring(0, 60);
-    return `<div class="slog"><span class="slog-ts">${t}</span><span class="slog-role ${cls}">${r}</span><span class="slog-content">${esc(content)}</span></div>`;
+    const content = l.tool_call ? `${l.tool_call.category} ${l.tool_call.name}` : l.content.substring(0, 50);
+    return `<div class="sl"><span class="sl-ts">${t}</span><span class="sl-r sl-r-${r}">${r}</span><span class="sl-c">${esc(content)}</span></div>`;
   }).join('');
-  sessionLogEl.scrollTop = sessionLogEl.scrollHeight;
+  slogPanel.scrollTop = slogPanel.scrollHeight;
 }
 
-// ── Workflow panel ──
 function renderWorkflow() {
   const wf = getActiveWorkflow();
-  if (!wf) {
-    wfStepsEl.innerHTML = '';
-    return;
-  }
+  if (!wf) { wfStepsEl.innerHTML = ''; return; }
   const idx = getStepIndex();
-  const total = getTotalSteps();
-  wfStepsEl.innerHTML = `<div style="font-size:10px;color:var(--cyan);margin:6px 0 4px">${esc(wf.title)} (${idx + 1}/${total})</div>` +
-    wf.steps.map((s, i) => {
-      const numCls = i === idx ? 'active' : '';
-      const txtCls = i < idx ? 'done' : i === idx ? 'active' : '';
-      return `<div class="wf-step"><span class="wf-num ${numCls}">${s.id}</span><span class="wf-text ${txtCls}">${esc(s.instruction)}</span></div>`;
+  wfStepsEl.innerHTML = `<div style="font-size:10px;color:var(--cyan);margin:4px 0 2px">${esc(wf.title)} [${idx + 1}/${getTotalSteps()}]</div>`
+    + wf.steps.map((s, i) => {
+      const nc = i === idx ? 'act' : '';
+      const tc = i < idx ? 'done' : i === idx ? 'act' : '';
+      return `<div class="ws"><span class="ws-n ${nc}">${s.id}</span><span class="ws-t ${tc}">${esc(s.instruction)}</span></div>`;
     }).join('');
 }
 
-// ── Backend probe ──
-async function probeBackend() {
-  try {
-    const r = await fetch('http://localhost:5001/api/health', { signal: AbortSignal.timeout(1500) });
-    if (r.ok) {
-      const data = await r.json();
-      backendOnline = true;
-      const mode = data.instrument || 'mock';
-      dotScope.className = mode === 'mock' ? 'dot dot-warn' : 'dot dot-on';
-      scopeLabelEl.textContent = `scope: ${mode}`;
-      return;
-    }
-  } catch {}
-  backendOnline = false;
-  dotScope.className = 'dot dot-off';
-  scopeLabelEl.textContent = 'scope: local mock';
+async function refreshAll() {
+  await fetchScopeState();
+  renderScope();
+  renderAnomalies();
+  renderProgress();
+  renderSessionLog();
+  renderWorkflow();
 }
 
 // ── Instrument action detection ──
-function detectAction(text: string): { name: string; params: Record<string, unknown> } | null {
+function detectAction(text: string): { path: string; value: any } | null {
   const l = text.toLowerCase();
   if (/timebase|time.?base|time.?div/.test(l)) {
     const m = l.match(/(\d+(?:\.\d+)?)\s*(?:ms|us|µs|ns|s)/);
@@ -202,28 +244,35 @@ function detectAction(text: string): { name: string; params: Record<string, unkn
       if (l.includes('ms')) v *= 0.001;
       else if (l.includes('us') || l.includes('µs')) v *= 0.000001;
       else if (l.includes('ns')) v *= 0.000000001;
-      return { name: 'set_timebase', params: { timebase_s_div: v } };
+      return { path: 'timebase.scale', value: v };
     }
   }
   if (/vertical.?scale|v.?div|volts.?per/.test(l)) {
-    const m = l.match(/(\d+(?:\.\d+)?)\s*(?:mv|v)/);
+    const m = l.match(/(\d+(?:\.\d+)?)\s*(?:mv|v)/i);
     if (m) {
       let v = parseFloat(m[1]);
-      if (l.includes('mv')) v *= 0.001;
+      if (/mv/i.test(l)) v *= 0.001;
       const ch = l.match(/ch(?:annel)?\s*(\d)/);
-      return { name: 'set_vertical_scale', params: { channel: ch ? parseInt(ch[1]) : 1, scale_v_div: v } };
+      return { path: `channel.${ch ? ch[1] : '1'}.vertical_scale`, value: v };
     }
   }
   if (/coupling.*(ac|dc)/i.test(l)) {
-    const coupling = /ac/i.test(l) ? 'AC' : 'DC';
+    const coupling = /\bac\b/i.test(l) ? 'AC' : 'DC';
     const ch = l.match(/ch(?:annel)?\s*(\d)/);
-    return { name: 'set_channel_coupling', params: { channel: ch ? parseInt(ch[1]) : 1, coupling } };
+    return { path: `channel.${ch ? ch[1] : '1'}.coupling`, value: coupling };
   }
-  if (/autoset|auto.?set/.test(l)) return { name: 'run_autoset', params: {} };
+  if (/trigger.?level/i.test(l)) {
+    const m = l.match(/(\d+(?:\.\d+)?)\s*v/i);
+    if (m) return { path: 'trigger.level', value: parseFloat(m[1]) };
+  }
+  if (/trigger.?source/i.test(l)) {
+    const m = l.match(/ch(?:annel)?\s*(\d)/i);
+    if (m) return { path: 'trigger.source', value: `CH${m[1]}` };
+  }
   return null;
 }
 
-// ── Main send handler ──
+// ── Send ──
 async function handleSend() {
   const text = inputEl.value.trim();
   if (!text) return;
@@ -236,56 +285,63 @@ async function handleSend() {
   try {
     const lower = text.toLowerCase();
 
-    // Confirmation responses
-    const pending = getPendingConfirmation();
-    if (pending) {
+    // Pending confirmation response
+    if (pendingConfirmationId) {
       if (/yes|confirm|proceed|go ahead|allow|okay|ok|do it/.test(lower)) {
-        const r = confirmPending();
+        const data = await sendInstrumentConfirm(pendingConfirmationPath!, pendingConfirmationValue, pendingConfirmationId);
         hideConfirm();
-        const msg = `parameter set: ${JSON.stringify(r.result)}`;
-        addMsg('tool', msg, ['WRITE']);
-        sessionLogger.logAssistantResponse(msg);
-        history.push({ role: 'user', content: text }, { role: 'model', content: msg });
-        refreshAll();
+        addMsg('tool', `confirmed → ${JSON.stringify(data.result)}`, ['WRITE']);
+        sessionLogger.logToolCall('set_parameter', { path: pendingConfirmationPath }, 'WRITE', data.result, true);
+        pendingConfirmationId = null;
+        await refreshAll();
         sendBtn.disabled = false;
         return;
       }
       if (/no|cancel|deny|stop|don't/.test(lower)) {
-        denyPending();
         hideConfirm();
-        addMsg('system', 'action denied by user');
-        history.push({ role: 'user', content: text }, { role: 'model', content: 'action denied' });
+        addMsg('system', 'action denied');
+        pendingConfirmationId = null;
         sendBtn.disabled = false;
         return;
       }
     }
 
-    // Workflow step advancement
+    // Workflow step
     if (/next step|continue|done|move on|proceed/.test(lower) && getActiveWorkflow()) {
-      const nextStep = advanceStep();
-      if (nextStep) {
-        let msg = `[step ${nextStep.id}/${getTotalSteps()}] ${nextStep.instruction}\n${nextStep.detail}`;
-        if (nextStep.safetyCheck) msg += `\n⚠️ ${nextStep.safetyCheck}`;
+      const step = advanceStep();
+      if (step) {
+        let msg = `[step ${step.id}/${getTotalSteps()}] ${step.instruction}\n${step.detail}`;
+        if (step.safetyCheck) msg += `\n⚠️ ${step.safetyCheck}`;
         addMsg('assistant', msg, ['workflow']);
         sessionLogger.logAssistantResponse(msg);
         history.push({ role: 'user', content: text }, { role: 'model', content: msg });
 
-        if (nextStep.instrumentAction) {
-          const r = executeFunction({ ...nextStep.instrumentAction, confirmed: false });
-          if (r.status === 'confirmation_required') {
-            showConfirm(r.confirmation_prompt || 'confirm instrument change?');
-            addMsg('tool', `pending: ${r.confirmation_prompt}`, ['WRITE']);
+        if (step.instrumentAction && backendOnline) {
+          const action = mapWorkflowAction(step.instrumentAction);
+          if (action) {
+            try {
+              const data = await sendInstrumentSet(action.path, action.value, false);
+              if (data.needsConfirmation) {
+                pendingConfirmationId = data.confirmationId;
+                pendingConfirmationPath = action.path;
+                pendingConfirmationValue = action.value;
+                showConfirm(`${data.summary} — confirm?`);
+                addMsg('tool', `preview: ${data.summary}`, ['WRITE']);
+              }
+            } catch (e) {
+              addMsg('system', `instrument error: ${(e as Error).message}`);
+            }
           }
         }
       } else {
-        addMsg('system', `workflow complete: ${getActiveWorkflow()?.title || 'done'}`, ['workflow']);
+        addMsg('system', 'workflow complete', ['workflow']);
       }
-      refreshAll();
+      await refreshAll();
       sendBtn.disabled = false;
       return;
     }
 
-    // Workflow start trigger
+    // Workflow start
     if (/walk me through|guide me|help me measure|start workflow/.test(lower)) {
       let wfId: string | null = null;
       if (/sine|1.?khz|measure|frequency/.test(lower)) wfId = 'measure-1khz-sine';
@@ -294,67 +350,89 @@ async function handleSend() {
         const wf = startWorkflow(wfId);
         if (wf) {
           const step = getCurrentStep()!;
-          let msg = `starting workflow: ${wf.title}\n\n[step 1/${getTotalSteps()}] ${step.instruction}\n${step.detail}`;
+          let msg = `workflow: ${wf.title}\n\n[step 1/${getTotalSteps()}] ${step.instruction}\n${step.detail}`;
           if (step.safetyCheck) msg += `\n⚠️ ${step.safetyCheck}`;
           addMsg('assistant', msg, ['workflow']);
           sessionLogger.logAssistantResponse(msg);
           history.push({ role: 'user', content: text }, { role: 'model', content: msg });
-          refreshAll();
+          await refreshAll();
           sendBtn.disabled = false;
           return;
         }
       }
     }
 
+    // Direct instrument command (user types "set timebase to 1ms")
+    const directAction = detectAction(text);
+    if (directAction && backendOnline) {
+      try {
+        const data = await sendInstrumentSet(directAction.path, directAction.value, false);
+        if (data.needsConfirmation) {
+          pendingConfirmationId = data.confirmationId;
+          pendingConfirmationPath = directAction.path;
+          pendingConfirmationValue = directAction.value;
+          showConfirm(`${data.summary} — confirm?`);
+          addMsg('tool', `preview: ${data.summary}`, ['WRITE']);
+          sessionLogger.logToolCall('set_parameter', directAction, 'WRITE');
+        } else if (data.ok) {
+          addMsg('tool', `set ${directAction.path} = ${directAction.value}`, ['WRITE']);
+        }
+        await refreshAll();
+        sendBtn.disabled = false;
+        // Still send to Gemini for a natural language response
+      } catch (e) {
+        addMsg('system', `instrument error: ${(e as Error).message}`);
+      }
+    }
+
     // Anomaly detection
     if (/noise|noisy|clip|clipped|unstable|drift|alias|wrong|broken|fault|problem|issue|diagnos|overvoltage|overload/.test(lower)) {
-      addMsg('system', 'running anomaly detection...', ['anomaly']);
       const diag = await diagnoseTrace({ description: text });
       anomalies.push(diag);
-
       let msg = diag.probable_cause;
-      if (diag.unsafe_flag) msg = '⚠️ SAFETY CONCERN: ' + msg;
+      if (diag.unsafe_flag) msg = '⚠️ SAFETY: ' + msg;
       msg += '\n\nfix steps:';
       diag.fix_steps.forEach((s, i) => { msg += `\n  ${i + 1}. ${s}`; });
       msg += `\n\nconfidence: ${(diag.confidence * 100).toFixed(0)}%`;
-
       addMsg('assistant', msg, ['anomaly']);
       sessionLogger.logAssistantResponse(msg, 'troubleshooting');
       history.push({ role: 'user', content: text }, { role: 'model', content: msg });
-      refreshAll();
+      await refreshAll();
       sendBtn.disabled = false;
       return;
     }
 
-    // Standard RAG + LLM flow
-    const ragContext = getContextForQuery(text);
-    if (ragContext) {
-      addMsg('system', `retrieved ${ragContext.split('---').length} context chunks`, ['rag']);
-    }
+    // RAG + Gemini
+    const ragCtx = getContextForQuery(text);
+    if (ragCtx) addMsg('system', `${ragCtx.split('---').length} context chunks retrieved`, ['rag']);
 
-    const instrState = JSON.stringify(getInstrumentState(), null, 1);
-    const wfContext = getWorkflowContext() || undefined;
-    const response = await askGemini(text, ragContext, instrState, history, wfContext);
+    const scopeStr = lastScopeState ? JSON.stringify(lastScopeState, null, 1) : 'instrument not connected';
+    const wfCtx = getWorkflowContext() || undefined;
+    const response = await askGemini(text, ragCtx, scopeStr, history, wfCtx);
 
     addMsg('assistant', response);
     sessionLogger.logAssistantResponse(response);
     history.push({ role: 'user', content: text }, { role: 'model', content: response });
     if (history.length > 40) history.splice(0, history.length - 40);
 
-    // Check for instrument action in response
-    const writeMatch = response.match(/(?:set|change|adjust|switch|enable|disable|configure)\s+(?:the\s+)?(\w[\w\s]*?)(?:\s+to\s+|\s+from\s+)/i);
-    if (writeMatch) {
-      const action = detectAction(response);
-      if (action) {
-        const r = executeFunction(action);
-        if (r.status === 'confirmation_required') {
-          showConfirm(r.confirmation_prompt || 'confirm instrument change?');
-          addMsg('tool', `pending: ${r.confirmation_prompt}`, ['WRITE']);
-        }
+    // Check if Gemini's response implies an instrument change
+    if (backendOnline) {
+      const implied = detectAction(response);
+      if (implied) {
+        try {
+          const data = await sendInstrumentSet(implied.path, implied.value, false);
+          if (data.needsConfirmation) {
+            pendingConfirmationId = data.confirmationId;
+            pendingConfirmationPath = implied.path;
+            pendingConfirmationValue = implied.value;
+            showConfirm(`${data.summary} — confirm?`);
+            addMsg('tool', `rhoda suggests: ${data.summary}`, ['WRITE']);
+          }
+        } catch {}
       }
     }
 
-    refreshAll();
+    await refreshAll();
   } catch (err) {
     addMsg('system', `error: ${(err as Error).message}`);
   }
@@ -362,38 +440,51 @@ async function handleSend() {
   inputEl.focus();
 }
 
-function refreshAll() {
-  renderScopeState();
-  renderAnomalies();
-  renderProgress();
-  renderSessionLog();
-  renderWorkflow();
+function mapWorkflowAction(action: { name: string; params: Record<string, unknown> }): { path: string; value: any } | null {
+  const p = action.params;
+  switch (action.name) {
+    case 'set_timebase': return { path: 'timebase.scale', value: p.timebase_s_div };
+    case 'set_vertical_scale': return { path: `channel.${p.channel || 1}.vertical_scale`, value: p.scale_v_div };
+    case 'set_channel_coupling': return { path: `channel.${p.channel || 1}.coupling`, value: p.coupling };
+    case 'set_channel_enabled': return { path: `channel.${p.channel || 1}.enabled`, value: p.enabled };
+    case 'set_probe_attenuation': return { path: `channel.${p.channel || 1}.probe_attenuation`, value: p.attenuation };
+    case 'set_trigger': {
+      if (p.level_v != null) return { path: 'trigger.level', value: p.level_v };
+      if (p.source != null) return { path: 'trigger.source', value: `CH${p.source}` };
+      if (p.mode != null) return { path: 'trigger.mode', value: p.mode };
+      if (p.slope != null) return { path: 'trigger.edge', value: p.slope };
+      return null;
+    }
+    case 'get_measurement': return null;
+    default: return null;
+  }
 }
 
-// ── Event wiring ──
+function showConfirm(t: string) { confirmText.textContent = t; confirmBanner.classList.add('active'); }
+function hideConfirm() { confirmBanner.classList.remove('active'); }
+
+// ── Events ──
 sendBtn.addEventListener('click', handleSend);
-inputEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+inputEl.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } });
+
+btnY.addEventListener('click', async () => {
+  if (!pendingConfirmationId) return;
+  try {
+    const data = await sendInstrumentConfirm(pendingConfirmationPath!, pendingConfirmationValue, pendingConfirmationId);
+    hideConfirm();
+    addMsg('tool', `confirmed → ${JSON.stringify(data.result)}`, ['WRITE']);
+    sessionLogger.logToolCall('set_parameter', { path: pendingConfirmationPath }, 'WRITE', data.result, true);
+    pendingConfirmationId = null;
+    await refreshAll();
+  } catch (e) {
+    addMsg('system', `confirm failed: ${(e as Error).message}`);
+  }
 });
 
-btnY.addEventListener('click', () => {
-  const r = confirmPending();
-  hideConfirm();
-  addMsg('tool', `confirmed: ${JSON.stringify(r.result)}`, ['WRITE']);
-  sessionLogger.logAssistantResponse(`confirmed: ${JSON.stringify(r.result)}`);
-  refreshAll();
-});
-
-btnN.addEventListener('click', () => {
-  denyPending();
-  hideConfirm();
-  addMsg('system', 'action denied');
-  refreshAll();
-});
+btnN.addEventListener('click', () => { hideConfirm(); pendingConfirmationId = null; addMsg('system', 'action denied'); });
 
 btnExport.addEventListener('click', () => {
-  const json = sessionLogger.exportJSON();
-  const blob = new Blob([json], { type: 'application/json' });
+  const blob = new Blob([sessionLogger.exportJSON()], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `rhoda-${sessionLogger.getSessionId()}.json`;
@@ -406,9 +497,11 @@ btnClear.addEventListener('click', () => {
   history.length = 0;
   anomalies.length = 0;
   stopWorkflow();
+  pendingConfirmationId = null;
   messagesEl.innerHTML = '';
+  hideConfirm();
   refreshAll();
-  addMsg('system', `new session: ${sessionLogger.getSessionId()}`);
+  addMsg('system', `session started: ${sessionLogger.getSessionId()}`);
 });
 
 document.querySelectorAll('.wf-btn').forEach(btn => {
@@ -418,7 +511,7 @@ document.querySelectorAll('.wf-btn').forEach(btn => {
     const wf = startWorkflow(id);
     if (!wf) return;
     const step = getCurrentStep()!;
-    let msg = `starting workflow: ${wf.title}\n\n[step 1/${getTotalSteps()}] ${step.instruction}\n${step.detail}`;
+    let msg = `workflow: ${wf.title}\n\n[step 1/${getTotalSteps()}] ${step.instruction}\n${step.detail}`;
     if (step.safetyCheck) msg += `\n⚠️ ${step.safetyCheck}`;
     addMsg('assistant', msg, ['workflow']);
     sessionLogger.logAssistantResponse(msg);
@@ -426,41 +519,40 @@ document.querySelectorAll('.wf-btn').forEach(btn => {
   });
 });
 
-// Section collapse toggle
-document.querySelectorAll('.panel-section h3').forEach(h => {
-  h.addEventListener('click', () => {
-    h.parentElement!.classList.toggle('collapsed');
-  });
+document.querySelectorAll('.psec h3').forEach(h => {
+  h.addEventListener('click', () => h.parentElement!.classList.toggle('collapsed'));
 });
 
 // ── Init ──
-sessionLabelEl.textContent = `session: ${sessionLogger.getSessionId().slice(-8)}`;
-
-// Load previous conversation from session storage
-const prevLogs = sessionLogger.getSessionLogs();
-for (const l of prevLogs) {
-  if (l.role === 'user') {
-    addMsg('user', l.content);
-  } else if (l.role === 'assistant') {
-    const tags: string[] = [];
-    if (l.topic === 'troubleshooting') tags.push('anomaly');
-    if (l.tool_call) tags.push(l.tool_call.category);
-    addMsg('assistant', l.content, tags);
-  } else if (l.role === 'tool' && l.tool_call) {
-    addMsg('tool', `${l.tool_call.category} ${l.tool_call.name}`, [l.tool_call.category]);
+(async () => {
+  // Restore previous session
+  const prev = sessionLogger.getSessionLogs();
+  for (const l of prev) {
+    if (l.role === 'user') addMsg('user', l.content);
+    else if (l.role === 'assistant') {
+      const tags: string[] = [];
+      if (l.topic === 'troubleshooting') tags.push('anomaly');
+      addMsg('assistant', l.content, tags);
+    } else if (l.role === 'tool' && l.tool_call) {
+      addMsg('tool', `${l.tool_call.category} ${l.tool_call.name}`, [l.tool_call.category]);
+    }
   }
-}
-
-if (prevLogs.length > 0) {
-  addMsg('system', `restored ${prevLogs.length} events from previous session`);
-  // Rebuild history for Gemini context
-  for (const l of prevLogs) {
-    if (l.role === 'user') history.push({ role: 'user', content: l.content });
-    if (l.role === 'assistant') history.push({ role: 'model', content: l.content });
+  if (prev.length > 0) {
+    addMsg('system', `restored ${prev.length} events from previous session`);
+    for (const l of prev) {
+      if (l.role === 'user') history.push({ role: 'user', content: l.content });
+      if (l.role === 'assistant') history.push({ role: 'model', content: l.content });
+    }
+    if (history.length > 40) history.splice(0, history.length - 40);
   }
-  if (history.length > 40) history.splice(0, history.length - 40);
-}
 
-probeBackend();
-refreshAll();
-inputEl.focus();
+  await probeBackend();
+  await refreshAll();
+
+  if (!backendOnline) {
+    addMsg('system', 'backend offline — start with: python server/app.py');
+  } else {
+    addMsg('system', `connected to backend (${instrumentMode})`);
+  }
+  inputEl.focus();
+})();
