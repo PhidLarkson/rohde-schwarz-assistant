@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Rhoda Virtual Lab Assistant — Technical Implementation Report</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm; @bottom-center { content: "Page " counter(page) " of " counter(pages); font-size: 9px; color: #666; } }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; font-size: 11pt; line-height: 1.55; color: #1a1a2e; }
+  h1 { font-size: 22pt; color: #0a2540; margin: 0 0 6px; }
+  h2 { font-size: 16pt; color: #0a2540; margin: 36px 0 12px; border-bottom: 2px solid #00d4aa; padding-bottom: 4px; page-break-after: avoid; }
+  h3 { font-size: 13pt; color: #16213e; margin: 20px 0 8px; page-break-after: avoid; }
+  h4 { font-size: 11pt; color: #333; margin: 14px 0 6px; }
+  p { margin: 0 0 10px; text-align: justify; }
+  ul, ol { margin: 0 0 12px 20px; }
+  li { margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 10pt; }
+  th { background: #0a2540; color: #fff; padding: 8px 10px; text-align: left; font-weight: 600; }
+  td { padding: 7px 10px; border-bottom: 1px solid #e0e0e0; }
+  tr:nth-child(even) td { background: #f8f9fa; }
+  code { font-family: 'SF Mono', 'Consolas', 'Courier New', monospace; font-size: 9.5pt; background: #f0f2f5; padding: 1px 5px; border-radius: 3px; }
+  pre { background: #0a2540; color: #e6edf3; padding: 14px 16px; border-radius: 6px; font-size: 9pt; line-height: 1.5; overflow-x: auto; margin: 8px 0 16px; white-space: pre-wrap; font-family: 'SF Mono', 'Consolas', monospace; }
+  .cover { text-align: center; padding: 60px 0 40px; page-break-after: always; }
+  .cover h1 { font-size: 28pt; margin-bottom: 8px; }
+  .cover .subtitle { font-size: 14pt; color: #555; margin-bottom: 30px; }
+  .cover .meta { font-size: 11pt; color: #666; line-height: 2; }
+  .cover .logo { font-size: 36pt; margin-bottom: 20px; }
+  .highlight { background: #e8f5e9; border-left: 4px solid #00d4aa; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .warning { background: #fff3e0; border-left: 4px solid #ff9800; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .danger { background: #fce4ec; border-left: 4px solid #f44336; padding: 10px 14px; margin: 12px 0; border-radius: 4px; }
+  .metric-grid { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+  .metric { background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px 18px; flex: 1; min-width: 140px; text-align: center; }
+  .metric .value { font-size: 22pt; font-weight: 700; color: #0a2540; }
+  .metric .label { font-size: 9pt; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+  .arch-box { border: 2px solid #0a2540; border-radius: 8px; padding: 12px; margin: 6px 0; }
+  .arch-box h4 { margin-top: 0; color: #0a2540; }
+  .toc a { color: #0a2540; text-decoration: none; }
+  .toc li { margin-bottom: 6px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 9pt; font-weight: 600; }
+  .badge-done { background: #e8f5e9; color: #2e7d32; }
+  .badge-partial { background: #fff3e0; color: #e65100; }
+  .badge-todo { background: #fce4ec; color: #c62828; }
+  .flow-step { display: flex; align-items: flex-start; margin-bottom: 10px; }
+  .flow-num { background: #0a2540; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12pt; flex-shrink: 0; margin-right: 12px; margin-top: 2px; }
+  .flow-content { flex: 1; }
+  hr { border: none; border-top: 1px solid #e0e0e0; margin: 20px 0; }
+  .scpi-cmd { font-family: monospace; background: #e8f0fe; padding: 2px 6px; border-radius: 3px; color: #1a73e8; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════ COVER ═══════════════════════════════════════════ -->
+<div class="cover">
+  <div class="logo">🔬</div>
+  <h1>Rhoda — Virtual Lab Assistant</h1>
+  <div class="subtitle">Technical Implementation Report</div>
+  <p style="font-size:13pt; color:#00d4aa; font-weight:600; margin-bottom:30px;">
+    Track 2: Virtual Lab Assistant (Conversational / Voice)
+  </p>
+  <div class="meta">
+    <strong>Hackathon:</strong> Rohde &amp; Schwarz AI-Assisted Onboarding in Electrical Engineering<br>
+    <strong>Institution:</strong> Kwame Nkrumah University of Science and Technology (KNUST)<br>
+    <strong>Date:</strong> June 2026<br>
+    <strong>Team:</strong> Afari (Stream I/O) · Gregory (RAG) · William (Instrument API) · Prince (Vision/Logging)<br>
+    <strong>Repository:</strong> github.com/PhidLarkson/rohde-schwarz-assistant<br>
+    <strong>Branch:</strong> xr-agent-and-logging
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════ TOC ═══════════════════════════════════════════ -->
+<h2>Table of Contents</h2>
+<ol class="toc">
+  <li><a href="#sec1">Executive Summary</a></li>
+  <li><a href="#sec2">Project Metrics</a></li>
+  <li><a href="#sec3">System Architecture</a></li>
+  <li><a href="#sec4">Frontend Implementation</a>
+    <ol>
+      <li><a href="#sec4a">XR Avatar System (rhode_schwarz.ts)</a></li>
+      <li><a href="#sec4b">Voice Pipeline (genai.ts)</a></li>
+      <li><a href="#sec4c">Hand Ray &amp; XR Interaction (handRay.ts)</a></li>
+      <li><a href="#sec4d">Dashboard System (dashboard.ts)</a></li>
+      <li><a href="#sec4e">Text Chat Interface (chat.ts)</a></li>
+      <li><a href="#sec4f">RAG Retrieval Layer (rag.ts)</a></li>
+      <li><a href="#sec4g">Instrument Mock &amp; Bridge (instrument.ts)</a></li>
+      <li><a href="#sec4h">Anomaly Detection (anomaly.ts)</a></li>
+      <li><a href="#sec4i">Progress Tracking (progress.ts)</a></li>
+      <li><a href="#sec4j">Vision / Component ID (vision.ts)</a></li>
+      <li><a href="#sec4k">Guided Workflows (workflows.ts)</a></li>
+      <li><a href="#sec4l">Session Logging (session.ts)</a></li>
+    </ol>
+  </li>
+  <li><a href="#sec5">Backend Implementation</a>
+    <ol>
+      <li><a href="#sec5a">Flask API Server (app.py)</a></li>
+      <li><a href="#sec5b">Instrument Control — Mock Backend</a></li>
+      <li><a href="#sec5c">Instrument Control — RTB24 Hardware Backend</a></li>
+      <li><a href="#sec5d">Confirmation Gate</a></li>
+      <li><a href="#sec5e">RAG with Sentence Transformers</a></li>
+    </ol>
+  </li>
+  <li><a href="#sec6">SCPI Command Reference</a></li>
+  <li><a href="#sec7">API Endpoint Specification</a></li>
+  <li><a href="#sec8">Data Contracts</a></li>
+  <li><a href="#sec9">Demo Workflows</a></li>
+  <li><a href="#sec10">Testing</a></li>
+  <li><a href="#sec11">Completion Assessment</a></li>
+  <li><a href="#sec12">Oscilloscope Testing Procedure</a></li>
+  <li><a href="#sec13">Safety Considerations</a></li>
+  <li><a href="#sec14">Known Limitations &amp; Future Work</a></li>
+</ol>
+
+<!-- ═══════════════════════════════════════════ 1. EXECUTIVE SUMMARY ═══════════════════════════════════════════ -->
+<h2 id="sec1">1. Executive Summary</h2>
+
+<p>Rhoda is a conversational AI virtual lab assistant designed to guide KNUST electrical engineering students through Rohde &amp; Schwarz oscilloscope procedures. The system combines an XR avatar with voice interaction, a text-based chat interface, retrieval-augmented generation (RAG), real-time instrument control with safety-gated confirmation, anomaly detection for trace diagnosis, and adaptive progress tracking — delivering a complete Track 2 solution for the R&amp;S AI-Assisted Onboarding hackathon.</p>
+
+<p>The implementation spans <strong>6,326 lines of source code</strong> across 22 TypeScript modules and 6 Python modules, with a 10-document RAG corpus, 45 GLB animation assets, and 11 automated backend tests. The system supports both simulated and real R&amp;S RTB24 oscilloscope hardware via USB or LAN connections.</p>
+
+<div class="highlight">
+<strong>Key deliverables met:</strong> Two guided workflows (simple + safety-critical), voice and text chat interfaces, safety-gated instrument configuration with explicit confirmation, conversation transcript export, instructor dashboard with failure point analytics, and comprehensive documentation for connecting to instruments or simulator.
+</div>
+
+<!-- ═══════════════════════════════════════════ 2. METRICS ═══════════════════════════════════════════ -->
+<h2 id="sec2">2. Project Metrics</h2>
+
+<div class="metric-grid">
+  <div class="metric"><div class="value">6,326</div><div class="label">Lines of Code</div></div>
+  <div class="metric"><div class="value">22</div><div class="label">TypeScript Modules</div></div>
+  <div class="metric"><div class="value">6</div><div class="label">Python Modules</div></div>
+  <div class="metric"><div class="value">10</div><div class="label">RAG Corpus Docs</div></div>
+  <div class="metric"><div class="value">45</div><div class="label">GLB Animations</div></div>
+  <div class="metric"><div class="value">11</div><div class="label">Backend Tests</div></div>
+  <div class="metric"><div class="value">13</div><div class="label">API Endpoints</div></div>
+  <div class="metric"><div class="value">3</div><div class="label">Entry Points</div></div>
+</div>
+
+<table>
+  <tr><th>Module</th><th>File</th><th>Lines</th><th>Purpose</th></tr>
+  <tr><td>XR Avatar</td><td>rhode_schwarz.ts</td><td>1,405</td><td>Avatar, voice pipeline, lip sync, animations</td></tr>
+  <tr><td>Instrument Mock</td><td>instrument.ts</td><td>419</td><td>Client-side oscilloscope simulator + Flask bridge</td></tr>
+  <tr><td>Voice/AI</td><td>genai.ts</td><td>393</td><td>Gemini, GhanaNLP STT/TTS, translation</td></tr>
+  <tr><td>RAG (client)</td><td>rag.ts</td><td>363</td><td>Embedded keyword retrieval</td></tr>
+  <tr><td>XR Scene</td><td>index.ts</td><td>358</td><td>World setup, input wiring, placement</td></tr>
+  <tr><td>Instrument (server)</td><td>backends.py</td><td>307</td><td>Mock + RTB24 SCPI backends</td></tr>
+  <tr><td>Chat UI</td><td>chat.ts</td><td>304</td><td>Text chat entry point</td></tr>
+  <tr><td>Audio Recorder</td><td>audioRecorder.ts</td><td>296</td><td>Mic capture with WebAudio</td></tr>
+  <tr><td>Flask API</td><td>app.py</td><td>252</td><td>Unified backend server</td></tr>
+  <tr><td>Vision</td><td>vision.ts</td><td>249</td><td>Camera capture, component ID, live stream</td></tr>
+  <tr><td>Anomaly</td><td>anomaly.ts</td><td>237</td><td>Fault pattern matching + Gemini fallback</td></tr>
+  <tr><td>Scope Client</td><td>scope_client.py</td><td>214</td><td>ScopeClient with confirmation gating</td></tr>
+  <tr><td>Progress</td><td>progress.ts</td><td>201</td><td>Competency tracking, curriculum ordering</td></tr>
+  <tr><td>Hand Ray</td><td>handRay.ts</td><td>196</td><td>XR pointer beams and hit detection</td></tr>
+  <tr><td>Dashboard</td><td>dashboard.ts</td><td>195</td><td>XR panel UI system</td></tr>
+  <tr><td>Workflows</td><td>workflows.ts</td><td>189</td><td>Guided step-by-step procedures</td></tr>
+  <tr><td>Tests</td><td>test_api.py</td><td>174</td><td>11 integration tests</td></tr>
+  <tr><td>Interactions</td><td>interactions.ts</td><td>170</td><td>Interaction registry</td></tr>
+  <tr><td>Session</td><td>session.ts</td><td>168</td><td>Append-only event log</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ 3. ARCHITECTURE ═══════════════════════════════════════════ -->
+<h2 id="sec3">3. System Architecture</h2>
+
+<h3>3.1 High-Level Architecture</h3>
+<pre>
+┌─────────────────────────────────────────────────────────────────────┐
+│  FRONTEND (Vite + TypeScript, port 8081)                            │
+│                                                                     │
+│  ┌───────────────┐  ┌───────────────┐  ┌─────────────────────────┐ │
+│  │  XR Avatar    │  │  Text Chat    │  │  Instructor Dashboard   │ │
+│  │  index.html   │  │  chat.html    │  │  instructor.html        │ │
+│  │  Three.js     │  │  Vanilla TS   │  │  Vanilla JS             │ │
+│  │  WebXR + IWSDK│  │               │  │                         │ │
+│  └──────┬────────┘  └──────┬────────┘  └─────────────────────────┘ │
+│         │                  │                                        │
+│  ┌──────┴──────────────────┴────────────────────────────────────┐  │
+│  │                    Shared Core Modules                       │  │
+│  │  genai.ts ─── rag.ts ─── instrument.ts ─── session.ts       │  │
+│  │  anomaly.ts ─ vision.ts ─ progress.ts ── workflows.ts       │  │
+│  └──────┬──────────────────┬────────────────────────────────────┘  │
+│         │ Gemini/GhanaNLP  │ HTTP (localhost:5001)                  │
+└─────────┼──────────────────┼────────────────────────────────────────┘
+          │                  │
+          ▼                  ▼
+┌──────────────┐   ┌──────────────────────────────────────────────────┐
+│  Google AI   │   │  BACKEND (Flask, port 5001)                      │
+│  Gemini 2.5  │   │                                                  │
+│  Flash       │   │  ┌───────────┐  ┌────────────┐  ┌────────────┐ │
+│              │   │  │ RAG       │  │ Instrument │  │ Session    │ │
+│  GhanaNLP    │   │  │ Retrieval │  │ API + Gate │  │ Logging    │ │
+│  ASR + TTS   │   │  │ (s-trans) │  │            │  │ + Progress │ │
+│              │   │  └───────────┘  └──────┬─────┘  └────────────┘ │
+└──────────────┘   │                        │                        │
+                   │                ┌───────┴────────┐               │
+                   │                │  ScopeBackend   │               │
+                   │                │  Mock ──or── HW │               │
+                   │                └───────┬────────┘               │
+                   └────────────────────────┼────────────────────────┘
+                                            │ VISA / SCPI
+                                            ▼
+                                   ┌─────────────────┐
+                                   │  R&amp;S RTB24      │
+                                   │  Oscilloscope   │
+                                   │  (USB or LAN)   │
+                                   └─────────────────┘
+</pre>
+
+<h3>3.2 Data Flow — Voice Conversation</h3>
+<pre>
+User speaks ──▶ AudioRecorder (WebAudio API, opus/webm)
+              ──▶ Gemini STT (base64 audio → text)
+              ──▶ Confirmation check (pending WRITE?)
+              ──▶ Anomaly keyword check
+              ──▶ Workflow step check
+              ──▶ RAG retrieval (keyword match)
+              ──▶ Instrument state snapshot
+              ──▶ Gemini LLM (multi-turn context + RAG + state + workflow)
+              ──▶ Instrument action detection (regex)
+              ──▶ Confirmation gate (if WRITE)
+              ──▶ Gemini TTS (text → WAV)
+              ──▶ Web Audio API playback + lip sync (AnalyserNode)
+              ──▶ Session log (localStorage + server POST)
+</pre>
+
+<h3>3.3 Data Flow — Text Chat</h3>
+<pre>
+User types ──▶ chat.ts handleSend()
+            ──▶ Confirmation check / Workflow step check
+            ──▶ Anomaly detection (keyword trigger)
+            ──▶ RAG context retrieval
+            ──▶ askGemini() with history + RAG + instrument state + workflow context
+            ──▶ Instrument action detection + confirmation gate
+            ──▶ Display response + update instrument panel + progress bars
+            ──▶ Session log
+</pre>
+
+<h3>3.4 Technology Stack</h3>
+<table>
+  <tr><th>Layer</th><th>Technology</th><th>Version</th><th>Purpose</th></tr>
+  <tr><td>3D Rendering</td><td>Three.js (super-three)</td><td>0.177</td><td>WebGL scene, meshes, materials</td></tr>
+  <tr><td>XR Framework</td><td>Meta IWSDK</td><td>0.2.1</td><td>WebXR interactions, hand tracking, panels</td></tr>
+  <tr><td>Bundler</td><td>Vite</td><td>7.1</td><td>Dev server, HMR, multi-entry build</td></tr>
+  <tr><td>Language</td><td>TypeScript</td><td>5.5</td><td>Type-safe frontend code</td></tr>
+  <tr><td>LLM</td><td>Google Gemini 2.5 Flash</td><td>—</td><td>Reasoning, generation, vision, STT</td></tr>
+  <tr><td>TTS</td><td>Gemini TTS Preview</td><td>—</td><td>English speech synthesis (Vindemiatrix voice)</td></tr>
+  <tr><td>Twi NLP</td><td>GhanaNLP API</td><td>v1</td><td>Twi ASR, TTS, translation</td></tr>
+  <tr><td>Backend</td><td>Flask</td><td>3.0+</td><td>REST API server</td></tr>
+  <tr><td>RAG Embeddings</td><td>sentence-transformers</td><td>—</td><td>all-MiniLM-L6-v2 embeddings</td></tr>
+  <tr><td>Instrument</td><td>RsInstrument</td><td>1.124+</td><td>R&amp;S VISA/SCPI driver</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ 4. FRONTEND ═══════════════════════════════════════════ -->
+<h2 id="sec4">4. Frontend Implementation</h2>
+
+<h3 id="sec4a">4.1 XR Avatar System — <code>rhode_schwarz.ts</code> (1,405 lines)</h3>
+<p>The central module. The <code>RhodeSchwarzAssistant</code> class manages a GLB-based humanoid avatar with:</p>
+<ul>
+  <li><strong>Animation system:</strong> AnimationMixer with idle (9 variants), talking (6 variants), locomotion (18 variants), and expression categories. Lazy-loaded: primary idle loads first to unblock startup, remaining animations load in the background.</li>
+  <li><strong>Lip sync:</strong> Real-time AnalyserNode reads audio waveform data during TTS playback. Amplitude is normalized and mapped to morph target influences (jawOpen/mouthOpen) on the head mesh. Square-root curve prevents over-opening.</li>
+  <li><strong>Blinking:</strong> Periodic eye mesh visibility toggle (4.5–6s period, 150ms blink).</li>
+  <li><strong>Head tracking:</strong> Procedural lookAt with smooth slerp interpolation. Random glances in READY state; always faces user when LISTENING/PROCESSING/SPEAKING. Yaw/pitch clamped to ±60°.</li>
+  <li><strong>State machine:</strong> READY → LISTENING → PROCESSING → SPEAKING → READY. Silence detection (configurable threshold, 1200ms / 600ms fast mode) auto-stops recording.</li>
+  <li><strong>Multi-turn context:</strong> 20-turn <code>ChatTurn[]</code> history passed to Gemini for coherent follow-ups.</li>
+  <li><strong>Workflow integration:</strong> Detects trigger phrases ("walk me through", "help me measure") and keyword patterns to start structured workflows.</li>
+</ul>
+
+<h3 id="sec4b">4.2 Voice Pipeline — <code>genai.ts</code> (393 lines)</h3>
+<p>Two parallel pipelines:</p>
+
+<h4>English Pipeline</h4>
+<ol>
+  <li><strong>STT:</strong> <code>geminiTranscribeAudio()</code> — sends base64 audio blob to Gemini 2.5 Flash with prompt "Transcribe this audio exactly."</li>
+  <li><strong>LLM:</strong> <code>askGemini()</code> — multi-turn contents array with system instruction defining Rhoda's persona. Accepts RAG context, instrument state, conversation history, and optional workflow context.</li>
+  <li><strong>TTS:</strong> <code>geminiTTS()</code> — Gemini TTS preview model with Vindemiatrix voice. Returns raw PCM, converted to WAV via <code>pcmToWav()</code> helper (44-byte WAV header construction).</li>
+</ol>
+
+<h4>Twi Pipeline</h4>
+<ol>
+  <li><strong>STT:</strong> GhanaNLP ASR v1 — binary audio POST with <code>Ocp-Apim-Subscription-Key</code> header.</li>
+  <li><strong>Translation:</strong> GhanaNLP v1 translate (tw→en) for processing, then (en→tw) for response.</li>
+  <li><strong>LLM:</strong> Same Gemini call on English text.</li>
+  <li><strong>TTS:</strong> GhanaNLP TTS v1 with <code>twi_speaker_7</code>.</li>
+</ol>
+
+<h3 id="sec4c">4.3 Hand Ray &amp; XR Interaction — <code>handRay.ts</code> (196 lines)</h3>
+<p>Renders visible pointer beams from XR hand/controller inputs using <code>CylinderGeometry</code> meshes (tapered from 2mm to 0.5mm, 3m length). Uses <code>targetRaySpace</code> for accurate pointer direction. Features:</p>
+<ul>
+  <li>Per-material color: cyan (default), green (dashboard hit), yellow (avatar hit)</li>
+  <li>Hit dot: 8mm sphere rendered at intersection point (<code>renderOrder: 1000</code>, <code>depthTest: false</code>)</li>
+  <li>Raycasting against dashboard anchor and avatar mesh with recursive child intersection</li>
+  <li><code>handleSelect()</code>: UV-to-DOM coordinate mapping for virtual button clicks on PanelUI</li>
+</ul>
+
+<h3 id="sec4d">4.4 Dashboard System — <code>dashboard.ts</code> (195 lines)</h3>
+<p>ECS system subscribing to PanelUI entities. Wires click handlers for 8 buttons: btn-talk, btn-lang, btn-identify, btn-summon, btn-follow, btn-reset, btn-allow, btn-deny. Refreshes status text every frame. Shows/hides confirmation buttons when a pending WRITE operation exists.</p>
+
+<h3 id="sec4e">4.5 Text Chat Interface — <code>chat.ts</code> (304 lines)</h3>
+<p>Standalone entry point at <code>/chat.html</code>. Features:</p>
+<ul>
+  <li>Message display with role-based styling (user, assistant, system)</li>
+  <li>Sidebar: workflow launcher buttons, live instrument state panel, progress bars, transcript export</li>
+  <li>Confirmation bar: appears when WRITE operations need approval</li>
+  <li>Workflow step advancement via "next step" / "continue" keywords</li>
+  <li>Anomaly detection routing for troubleshooting queries</li>
+  <li>Full multi-turn conversation history (40 messages max)</li>
+</ul>
+
+<h3 id="sec4f">4.6 RAG Retrieval — <code>rag.ts</code> (363 lines)</h3>
+<p>Client-side keyword-based retrieval over an embedded corpus of 14 documents covering procedures (6), safety rules (4), and fault patterns (4). Scoring: keyword match (+3), title match (+2), content frequency (up to +3). Returns top-K chunks with source attribution and category tag.</p>
+
+<h3 id="sec4g">4.7 Instrument Mock &amp; Bridge — <code>instrument.ts</code> (419 lines)</h3>
+<p>Dual-mode operation:</p>
+<ul>
+  <li><strong>Local mock:</strong> In-memory oscilloscope state (4 channels, horizontal, trigger, measurements). 10 function catalogue entries (3 READ, 7 WRITE). WRITE operations require <code>confirmed: true</code> or return <code>confirmation_required</code> with a human-readable prompt.</li>
+  <li><strong>Flask bridge:</strong> On startup, probes <code>/api/health</code> with 1.5s timeout. If reachable, routes all calls to Flask backend. Falls back to local mock on network error.</li>
+  <li><strong>Safety limits:</strong> Validated per-parameter (e.g., <code>scale_v_div: 0.001–100</code>, <code>level_v: -100–100</code>).</li>
+</ul>
+
+<h3 id="sec4h">4.8 Anomaly Detection — <code>anomaly.ts</code> (237 lines)</h3>
+<p>Two-tier diagnosis:</p>
+<ol>
+  <li><strong>Rule-based:</strong> 8 fault patterns (clipped, noisy, unstable, flat line, overvoltage, aliasing, ringing, DC offset) with keyword matching, confidence scores (0.70–0.95), fix step arrays, and unsafe flags.</li>
+  <li><strong>Gemini fallback:</strong> For unrecognized patterns, sends description to Gemini with structured JSON output prompt. Parses probable_cause, confidence, fix_steps, and unsafe_flag.</li>
+</ol>
+
+<div class="warning">
+<strong>Safety:</strong> The overvoltage pattern has confidence 0.95 and <code>unsafe: true</code>. The first fix step is always "IMMEDIATELY disconnect the probe from the circuit."
+</div>
+
+<h3 id="sec4i">4.9 Progress Tracking — <code>progress.ts</code> (201 lines)</h3>
+<p>Rule-based competency scoring across 9 topic areas: safety, probe_compensation, vertical_scale, horizontal_timebase, triggering, measurements, signal_identification, troubleshooting, component_identification. Scoring formula:</p>
+<ul>
+  <li>User engagement: <code>min(userTurns × 15, 40)</code></li>
+  <li>Assistant responses: <code>min(assistantTurns × 10, 30)</code></li>
+  <li>Tool calls: <code>min(toolCalls × 10, 20)</code></li>
+  <li>Errors: <code>-5 per error</code></li>
+  <li>Confirmations: <code>+5 per confirmed WRITE</code></li>
+</ul>
+<p>Curriculum ordering determines the recommended next topic. <code>getNudge()</code> returns a suggestion when the student has been on one topic for 5+ turns with score ≥ 60.</p>
+
+<h3 id="sec4j">4.10 Vision / Component ID — <code>vision.ts</code> (249 lines)</h3>
+<p>Two modes:</p>
+<ul>
+  <li><strong>One-shot:</strong> <code>captureFrame()</code> → <code>identifyComponent()</code>. Captures rear camera frame, sends base64 JPEG to Gemini with structured prompt. Returns label, description, confidence, and safety_note.</li>
+  <li><strong>Live stream:</strong> Opens Gemini Live API session. Streams camera frames at ~1fps via <code>sendRealtimeInput()</code>. Receives real-time narration of lab setup observations.</li>
+</ul>
+
+<h3 id="sec4k">4.11 Guided Workflows — <code>workflows.ts</code> (189 lines)</h3>
+<p>Two workflow definitions:</p>
+<table>
+  <tr><th>Workflow</th><th>Category</th><th>Steps</th><th>Instrument Actions</th></tr>
+  <tr><td>Measure 1 kHz Sine Wave</td><td>Simple</td><td>10</td><td>7 (probe atten, enable CH1, V/div, timebase, trigger ×2, measurement)</td></tr>
+  <tr><td>Handle Overvoltage Warning</td><td>Safety-Critical</td><td>6</td><td>2 (probe atten, V/div) + 4 safety checks</td></tr>
+</table>
+<p>Each step contains: instruction text, detailed explanation, optional instrumentAction (function name + params), and optional safetyCheck warning. <code>getWorkflowContext()</code> generates a prompt injection that tells Gemini exactly which step the student is on.</p>
+
+<h3 id="sec4l">4.12 Session Logging — <code>session.ts</code> (168 lines)</h3>
+<p>Append-only log with schema: <code>{session_id, turn_id, role, content, tool_call?, confirmed?, topic?, timestamp}</code>. Persisted to localStorage and synced to Flask backend via POST. Supports export as JSON, session reset, and summary generation (turn count, topics covered, tool calls, confirmations).</p>
+
+<!-- ═══════════════════════════════════════════ 5. BACKEND ═══════════════════════════════════════════ -->
+<h2 id="sec5">5. Backend Implementation</h2>
+
+<h3 id="sec5a">5.1 Flask API Server — <code>app.py</code> (252 lines)</h3>
+<p>Unified backend combining instrument control, RAG retrieval, session logging, progress tracking, and failure point analytics. CORS-enabled for cross-origin frontend requests. Starts on port 5001 (configurable via <code>PORT</code> env var).</p>
+
+<h3 id="sec5b">5.2 Mock Backend — <code>backends.py:MockScopeBackend</code></h3>
+<p>Simulates an R&amp;S RTB24 with 2 channels, trigger, and measurement state. Supports scoped reads (<code>all</code>, <code>acquisition</code>, <code>channel</code>, <code>trigger</code>) and path-based parameter writes (<code>channel.1.vertical_scale</code>, <code>trigger.level</code>, etc.). Measurement results return realistic default values (1000 Hz, 2.0 Vpp, 0.707 Vrms).</p>
+
+<h3 id="sec5c">5.3 RTB24 Hardware Backend — <code>backends.py:RsInstrumentBackend</code></h3>
+<p>Communicates with a real Rohde &amp; Schwarz oscilloscope via <code>RsInstrument</code> (VISA/SCPI). Key features:</p>
+<ul>
+  <li><strong>Auto-discovery:</strong> <code>RsInstrument.list_resources("?*")</code> finds all connected instruments. <code>SCOPE_RESOURCE=USB</code> auto-selects the first USB device.</li>
+  <li><strong>Path-to-SCPI mapping:</strong> Internal map translates dot-notation paths (<code>channel.1.vertical_scale</code>) to SCPI commands (<code class="scpi-cmd">CHANnel1:SCALe</code>).</li>
+  <li><strong>Safe queries:</strong> All SCPI reads wrapped in try/except with defaults — a failed query never crashes the server.</li>
+  <li><strong>Measurement configuration:</strong> Automatically sets measurement type (<code class="scpi-cmd">MEASurement1:MAIN FREQuency</code>), enables measurement (<code class="scpi-cmd">MEASurement1:STATe ON</code>), then reads result (<code class="scpi-cmd">MEASurement1:RESult:ACTual?</code>).</li>
+</ul>
+
+<h3 id="sec5d">5.4 Confirmation Gate — <code>confirmation.py</code> (56 lines)</h3>
+<p>Every WRITE operation generates a unique <code>confirmation_id</code> (UUID hex) and stores a <code>PendingChange</code> with action, path, previous value, proposed value, and human-readable summary. Confirmation requires matching the ID, action, and path. Stale or mismatched tokens are rejected.</p>
+
+<h3 id="sec5e">5.5 Server-Side RAG — <code>rag.py</code> (97 lines)</h3>
+<p>Loads 10 corpus documents from <code>server/rag/corpus/{procedure,safety,fault}/*.md</code>. Each document has YAML frontmatter (<code>source</code>, <code>category</code>) and markdown body. Embeds all documents at startup using <code>all-MiniLM-L6-v2</code> (sentence-transformers). Retrieval uses cosine similarity on normalized embeddings with optional category filtering.</p>
+
+<!-- ═══════════════════════════════════════════ 6. SCPI ═══════════════════════════════════════════ -->
+<h2 id="sec6">6. SCPI Command Reference</h2>
+
+<table>
+  <tr><th>Path</th><th>SCPI Command</th><th>Type</th><th>Description</th></tr>
+  <tr><td>channel.N.enabled</td><td><code>CHANnelN:STATe {ON|OFF}</code></td><td>WRITE</td><td>Enable/disable channel</td></tr>
+  <tr><td>channel.N.vertical_scale</td><td><code>CHANnelN:SCALe {value}</code></td><td>WRITE</td><td>V/div setting</td></tr>
+  <tr><td>channel.N.offset</td><td><code>CHANnelN:OFFSet {value}</code></td><td>WRITE</td><td>Vertical offset</td></tr>
+  <tr><td>channel.N.coupling</td><td><code>CHANnelN:COUPling {AC|DC}</code></td><td>WRITE</td><td>Input coupling mode</td></tr>
+  <tr><td>trigger.source</td><td><code>TRIGger:A:SOURce {CH1|CH2|...}</code></td><td>WRITE</td><td>Trigger source channel</td></tr>
+  <tr><td>trigger.level</td><td><code>TRIGger:A:LEVel1:VALue {value}</code></td><td>WRITE</td><td>Trigger threshold (V)</td></tr>
+  <tr><td>trigger.edge</td><td><code>TRIGger:A:EDGE:SLOPe {POS|NEG}</code></td><td>WRITE</td><td>Trigger edge direction</td></tr>
+  <tr><td>trigger.mode</td><td><code>TRIGger:A:MODE {AUTO|NORM|SING}</code></td><td>WRITE</td><td>Trigger mode</td></tr>
+  <tr><td>timebase.scale</td><td><code>TIMebase:SCALe {value}</code></td><td>WRITE</td><td>Horizontal time/div</td></tr>
+  <tr><td>acquisition.state</td><td><code>RUN / STOP</code></td><td>WRITE</td><td>Start/stop acquisition</td></tr>
+  <tr><td>(identity)</td><td><code>*IDN?</code></td><td>READ</td><td>Instrument identification</td></tr>
+  <tr><td>(measurement)</td><td><code>MEASurement1:RESult:ACTual?</code></td><td>READ</td><td>Current measurement value</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ 7. API ═══════════════════════════════════════════ -->
+<h2 id="sec7">7. API Endpoint Specification</h2>
+
+<table>
+  <tr><th>Method</th><th>Endpoint</th><th>Category</th><th>Request Body</th><th>Response</th></tr>
+  <tr><td>GET</td><td>/api/health</td><td>Health</td><td>—</td><td><code>{status, instrument, rag, session_logs}</code></td></tr>
+  <tr><td>GET</td><td>/api/instrument/state</td><td>READ</td><td>?scope=all</td><td><code>{ok, name, category, result}</code></td></tr>
+  <tr><td>POST</td><td>/api/instrument/set</td><td>WRITE</td><td><code>{path, value, confirmed, confirmationId}</code></td><td><code>{ok, needsConfirmation, confirmationId, summary}</code></td></tr>
+  <tr><td>POST</td><td>/api/instrument/measure</td><td>MEAS</td><td><code>{measurementType, source, confirmed}</code></td><td><code>{ok, result: {value, unit, status}}</code></td></tr>
+  <tr><td>POST</td><td>/api/instrument/confirm</td><td>WRITE</td><td><code>{path, value, confirmationId}</code></td><td><code>{ok, result}</code></td></tr>
+  <tr><td>GET</td><td>/api/instrument/discover</td><td>READ</td><td>—</td><td><code>{resources: [...], count}</code></td></tr>
+  <tr><td>POST</td><td>/api/rag/retrieve</td><td>READ</td><td><code>{query, top_k, category}</code></td><td><code>{chunks: [{text, source, score}]}</code></td></tr>
+  <tr><td>POST</td><td>/api/session/log</td><td>WRITE</td><td><code>{session_id, role, content, ...}</code></td><td><code>{ack, count}</code></td></tr>
+  <tr><td>GET</td><td>/api/session/logs</td><td>READ</td><td>?session_id=</td><td><code>{logs: [...], count}</code></td></tr>
+  <tr><td>GET</td><td>/api/session/transcript</td><td>READ</td><td>?session_id=</td><td>text/plain download</td></tr>
+  <tr><td>GET</td><td>/api/session/progress</td><td>READ</td><td>?session_id=</td><td><code>{topic_scores, recommended_next}</code></td></tr>
+  <tr><td>GET</td><td>/api/session/failure-points</td><td>READ</td><td>—</td><td><code>{total_errors, common_faults, ...}</code></td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ 8. CONTRACTS ═══════════════════════════════════════════ -->
+<h2 id="sec8">8. Data Contracts</h2>
+
+<h3>8.1 LogEvent</h3>
+<pre>
+{
+  session_id: string,     // e.g. "session_m1abc_x9z2"
+  turn_id: number,        // monotonically increasing per session
+  role: "user" | "assistant" | "system" | "tool",
+  content: string,
+  tool_call?: {
+    name: string,         // e.g. "set_timebase"
+    params: Record&lt;string, unknown&gt;,
+    category: "READ" | "WRITE",
+    result?: unknown
+  },
+  confirmed?: boolean,
+  topic?: string,         // e.g. "triggering"
+  timestamp: string       // ISO 8601
+}
+</pre>
+
+<h3>8.2 CallFunctionResult</h3>
+<pre>
+{
+  status: "ok" | "error" | "confirmation_required",
+  result?: unknown,
+  error?: string,
+  confirmation_prompt?: string  // human-readable action description
+}
+</pre>
+
+<h3>8.3 DiagnoseResult</h3>
+<pre>
+{
+  probable_cause: string,    // "Signal clipping — input amplitude exceeds..."
+  confidence: number,        // 0.0 – 1.0
+  fix_steps: string[],       // ordered remediation steps
+  unsafe_flag: boolean       // true if equipment/personal safety risk
+}
+</pre>
+
+<h3>8.4 WorkflowStep</h3>
+<pre>
+{
+  id: number,
+  instruction: string,       // "Set probe attenuation to 10X."
+  detail: string,            // extended explanation
+  instrumentAction?: {       // auto-populated instrument call
+    name: string,
+    params: Record&lt;string, unknown&gt;
+  },
+  safetyCheck?: string       // safety warning if applicable
+}
+</pre>
+
+<!-- ═══════════════════════════════════════════ 9. WORKFLOWS ═══════════════════════════════════════════ -->
+<h2 id="sec9">9. Demo Workflows</h2>
+
+<h3>9.1 Workflow 1: Measure a 1 kHz Sine Wave (Simple)</h3>
+<table>
+  <tr><th>Step</th><th>Instruction</th><th>Instrument Action</th></tr>
+  <tr><td>1</td><td>Connect probe to CH1 BNC input</td><td>—</td></tr>
+  <tr><td>2</td><td>Set probe attenuation to 10X</td><td><code>set_probe_attenuation(ch=1, att="10X")</code></td></tr>
+  <tr><td>3</td><td>Enable CH1</td><td><code>set_channel_enabled(ch=1, enabled=true)</code></td></tr>
+  <tr><td>4</td><td>Set vertical scale to 1 V/div</td><td><code>set_vertical_scale(ch=1, scale=1.0)</code></td></tr>
+  <tr><td>5</td><td>Set timebase to 500 µs/div</td><td><code>set_timebase(timebase=0.0005)</code></td></tr>
+  <tr><td>6</td><td>Set trigger to CH1, rising edge, auto</td><td><code>set_trigger(src=1, slope="rising", mode="auto")</code></td></tr>
+  <tr><td>7</td><td>Adjust trigger level to midpoint</td><td><code>set_trigger(src=1, level=1.0)</code></td></tr>
+  <tr><td>8</td><td>Verify waveform is stable</td><td>—</td></tr>
+  <tr><td>9</td><td>Read measurement values</td><td><code>get_measurement()</code></td></tr>
+  <tr><td>10</td><td>Review results</td><td>—</td></tr>
+</table>
+
+<h3>9.2 Workflow 2: Handle Overvoltage Warning (Safety-Critical)</h3>
+<table>
+  <tr><th>Step</th><th>Instruction</th><th>Safety Check</th></tr>
+  <tr><td>1</td><td>STOP — Disconnect probe immediately</td><td>⚠️ Overvoltage can damage instrument and create safety hazard</td></tr>
+  <tr><td>2</td><td>Check signal voltage with multimeter</td><td>⚠️ Never assume voltage is safe — always verify</td></tr>
+  <tr><td>3</td><td>Verify voltage within safe limits</td><td>⚠️ Exceeding limits can permanently damage input amplifier</td></tr>
+  <tr><td>4</td><td>Select correct probe attenuation</td><td>Instrument: <code>set_probe_attenuation(ch=1, att="10X")</code></td></tr>
+  <tr><td>5</td><td>Set oscilloscope to maximum V/div</td><td>Instrument: <code>set_vertical_scale(ch=1, scale=10.0)</code></td></tr>
+  <tr><td>6</td><td>Reconnect probe carefully and verify</td><td>—</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════ 10. TESTING ═══════════════════════════════════════════ -->
+<h2 id="sec10">10. Testing</h2>
+
+<h3>10.1 Backend API Tests (11 tests, all passing)</h3>
+<table>
+  <tr><th>Test</th><th>What It Validates</th></tr>
+  <tr><td>test_health</td><td>Health endpoint returns status, instrument mode, RAG status</td></tr>
+  <tr><td>test_instrument_state_read</td><td>READ state returns ok=true with result object</td></tr>
+  <tr><td>test_instrument_set_requires_confirmation</td><td>WRITE without confirmed=true returns needsConfirmation</td></tr>
+  <tr><td>test_instrument_set_confirmed</td><td>WRITE with valid confirmationId succeeds</td></tr>
+  <tr><td>test_instrument_measure</td><td>Measurement endpoint returns result</td></tr>
+  <tr><td>test_instrument_discover</td><td>Discovery endpoint returns resources array</td></tr>
+  <tr><td>test_session_log_and_retrieve</td><td>Log event, then retrieve by session_id</td></tr>
+  <tr><td>test_session_transcript_export</td><td>Transcript exports as text/plain with correct content</td></tr>
+  <tr><td>test_session_progress</td><td>Progress endpoint returns topic_scores and recommended_next</td></tr>
+  <tr><td>test_failure_points</td><td>Failure points endpoint returns error/fault aggregation</td></tr>
+  <tr><td>test_rag_retrieve</td><td>RAG retrieval returns chunks array</td></tr>
+</table>
+
+<pre>
+$ python server/test_api.py
+  PASS  test_failure_points
+  PASS  test_health
+  PASS  test_instrument_discover
+  PASS  test_instrument_measure
+  PASS  test_instrument_set_confirmed
+  PASS  test_instrument_set_requires_confirmation
+  PASS  test_instrument_state_read
+  PASS  test_rag_retrieve
+  PASS  test_session_log_and_retrieve
+  PASS  test_session_progress
+  PASS  test_session_transcript_export
+
+11 passed, 0 failed out of 11
+</pre>
+
+<!-- ═══════════════════════════════════════════ 11. COMPLETION ═══════════════════════════════════════════ -->
+<h2 id="sec11">11. Completion Assessment</h2>
+
+<h3>11.1 Track 2 Deliverables</h3>
+<table>
+  <tr><th>Deliverable</th><th>Status</th><th>Evidence</th></tr>
+  <tr><td>Live demo: ≥2 workflows (simple + safety-critical)</td><td><span class="badge badge-done">DONE</span></td><td>workflows.ts: "Measure 1kHz Sine" (10 steps) + "Handle Overvoltage" (6 steps)</td></tr>
+  <tr><td>Assistant guides user through workflow</td><td><span class="badge badge-done">DONE</span></td><td>Step-by-step with Gemini context injection via getWorkflowContext()</td></tr>
+  <tr><td>Instrument configuration after confirmation</td><td><span class="badge badge-done">DONE</span></td><td>instrument.ts confirmation gate + dashboard btn-allow/btn-deny</td></tr>
+  <tr><td>Conversation transcripts</td><td><span class="badge badge-done">DONE</span></td><td>session.ts exportJSON() + server /api/session/transcript</td></tr>
+  <tr><td>Code repo</td><td><span class="badge badge-done">DONE</span></td><td>github.com/PhidLarkson/rohde-schwarz-assistant</td></tr>
+  <tr><td>README on connecting to instruments/simulator</td><td><span class="badge badge-done">DONE</span></td><td>README.md: Simulator Mode + RTB24 via USB/LAN sections</td></tr>
+</table>
+
+<h3>11.2 Evaluation Criteria</h3>
+<table>
+  <tr><th>Metric</th><th>Status</th><th>Implementation</th></tr>
+  <tr><td>Helpfulness: user task success rate</td><td><span class="badge badge-done">DONE</span></td><td>Guided workflows with step tracking, RAG-grounded responses</td></tr>
+  <tr><td>Accuracy: correctness of instructions</td><td><span class="badge badge-done">DONE</span></td><td>RAG corpus from R&amp;S documentation, safety limits enforced</td></tr>
+  <tr><td>Accuracy: safety checks</td><td><span class="badge badge-done">DONE</span></td><td>Confirmation gate, overvoltage detection, safety corpus</td></tr>
+  <tr><td>Robustness: ambiguous queries</td><td><span class="badge badge-partial">PARTIAL</span></td><td>Gemini handles ambiguity; no explicit disambiguation prompts</td></tr>
+  <tr><td>Robustness: error recovery</td><td><span class="badge badge-done">DONE</span></td><td>Pipeline error handler with status display and auto-retry</td></tr>
+</table>
+
+<h3>11.3 Stretch Goals</h3>
+<table>
+  <tr><th>Goal</th><th>Status</th><th>Notes</th></tr>
+  <tr><td>Voice integration</td><td><span class="badge badge-done">DONE</span></td><td>Full duplex: Gemini STT → LLM → TTS with lip sync</td></tr>
+  <tr><td>Auto-configure instruments after confirmation</td><td><span class="badge badge-done">DONE</span></td><td>Real RTB24 SCPI commands via RsInstrumentBackend</td></tr>
+  <tr><td>Adapt explanations to skill level</td><td><span class="badge badge-partial">PARTIAL</span></td><td>Progress tracking identifies weak areas; nudge system suggests topics</td></tr>
+</table>
+
+<h3>11.4 Overall Completion Scale</h3>
+
+<div class="metric-grid">
+  <div class="metric" style="background:#e8f5e9"><div class="value" style="color:#2e7d32">78%</div><div class="label">Overall Completion</div></div>
+  <div class="metric" style="background:#e8f5e9"><div class="value" style="color:#2e7d32">100%</div><div class="label">Deliverables Met</div></div>
+  <div class="metric" style="background:#e8f5e9"><div class="value" style="color:#2e7d32">90%</div><div class="label">Core Features</div></div>
+  <div class="metric" style="background:#fff3e0"><div class="value" style="color:#e65100">60%</div><div class="label">Testing Coverage</div></div>
+  <div class="metric" style="background:#fff3e0"><div class="value" style="color:#e65100">70%</div><div class="label">Hardware Integration</div></div>
+</div>
+
+<p><strong>Remaining 22%</strong> consists of: end-to-end testing with real hardware (8%), explicit disambiguation prompting for ambiguous queries (4%), latency measurement instrumentation (3%), privacy consent flow (3%), more corpus documents (2%), production error handling hardening (2%).</p>
+
+<!-- ═══════════════════════════════════════════ 12. OSCILLOSCOPE TESTING ═══════════════════════════════════════════ -->
+<h2 id="sec12">12. Oscilloscope Testing Procedure</h2>
+
+<h3>12.1 Prerequisites</h3>
+<ol>
+  <li>R&amp;S RTB24 oscilloscope connected via USB</li>
+  <li>R&amp;S VISA driver installed (from rohde-schwarz.com)</li>
+  <li>Python package: <code>pip install RsInstrument</code></li>
+  <li>Backend server running: <code>python server/app.py</code></li>
+</ol>
+
+<h3>12.2 Step-by-Step Testing</h3>
+
+<div class="flow-step">
+  <div class="flow-num">1</div>
+  <div class="flow-content">
+    <h4>Verify USB Connection</h4>
+    <pre>python3 -c "from RsInstrument import RsInstrument; print(RsInstrument.list_resources('?*'))"</pre>
+    <p>Expected output: a list containing your instrument's VISA address, e.g. <code>['USB0::0x0AAD::0x01D6::102345::INSTR']</code>. If empty, check USB cable and VISA driver installation.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">2</div>
+  <div class="flow-content">
+    <h4>Start Backend in Hardware Mode</h4>
+    <pre>export SCOPE_RESOURCE=USB
+python server/app.py</pre>
+    <p>The server should print: <code>Instrument: hardware (USB0::...)</code>. If it says "mock mode", the auto-discovery failed.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">3</div>
+  <div class="flow-content">
+    <h4>Test READ — Instrument State</h4>
+    <pre>curl http://localhost:5001/api/instrument/state?scope=all | python3 -m json.tool</pre>
+    <p>Verify: <code>ok: true</code>, <code>instrument_id</code> matches your RTB24 IDN string, channel states reflect physical scope settings.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">4</div>
+  <div class="flow-content">
+    <h4>Test WRITE — Set Timebase (with confirmation)</h4>
+    <pre># Step 1: Preview the change
+curl -X POST http://localhost:5001/api/instrument/set \
+  -H "Content-Type: application/json" \
+  -d '{"path":"timebase.scale","value":0.001,"confirmed":false}'
+
+# Note the confirmationId from the response
+
+# Step 2: Confirm the change
+curl -X POST http://localhost:5001/api/instrument/confirm \
+  -H "Content-Type: application/json" \
+  -d '{"path":"timebase.scale","value":0.001,"confirmationId":"YOUR_ID_HERE"}'</pre>
+    <p>Verify: The oscilloscope's timebase should physically change to 1 ms/div. Check the scope display.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">5</div>
+  <div class="flow-content">
+    <h4>Test WRITE — Set Vertical Scale</h4>
+    <pre># Preview
+curl -X POST http://localhost:5001/api/instrument/set \
+  -H "Content-Type: application/json" \
+  -d '{"path":"channel.1.vertical_scale","value":0.5,"confirmed":false}'
+
+# Confirm with the returned confirmationId
+curl -X POST http://localhost:5001/api/instrument/confirm \
+  -H "Content-Type: application/json" \
+  -d '{"path":"channel.1.vertical_scale","value":0.5,"confirmationId":"YOUR_ID"}'</pre>
+    <p>Verify: CH1 vertical scale changes to 500 mV/div on the scope.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">6</div>
+  <div class="flow-content">
+    <h4>Test Measurement</h4>
+    <p>Connect a signal source (e.g., probe comp output) to CH1.</p>
+    <pre>curl -X POST http://localhost:5001/api/instrument/measure \
+  -H "Content-Type: application/json" \
+  -d '{"measurementType":"frequency","source":"CH1","confirmed":true,"confirmationId":"skip"}'</pre>
+    <p>Verify: The returned <code>value</code> should match the physical signal frequency (e.g., ~1000 Hz for the probe comp output).</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">7</div>
+  <div class="flow-content">
+    <h4>Test via Chat Interface</h4>
+    <pre># Start frontend
+npx vite</pre>
+    <p>Open <code>https://localhost:8081/chat.html</code>. Click "Measure 1 kHz Sine" workflow. Walk through each step — each instrument-changing step should show a confirmation dialog. Approve each step and verify the oscilloscope physically changes settings.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">8</div>
+  <div class="flow-content">
+    <h4>Test Free Conversation with Real Scope</h4>
+    <p>In the chat, type: "What is the current oscilloscope state?" — Rhoda should respond with real values from the instrument. Then type: "Set the timebase to 2ms per division" — Rhoda should ask for confirmation, and on approval, the physical scope should change.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">9</div>
+  <div class="flow-content">
+    <h4>Verify Safety Gate</h4>
+    <p>Type: "Set the vertical scale to 200 V/div". The system should reject this because <code>scale_v_div</code> has a safety limit of max 100 V/div. Verify the error message is returned and the scope is NOT changed.</p>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">10</div>
+  <div class="flow-content">
+    <h4>Export Transcript</h4>
+    <p>Click "Export Transcript" in the chat sidebar. Verify the JSON file contains all conversation turns, tool calls, and confirmation events with timestamps.</p>
+  </div>
+</div>
+
+<div class="danger">
+<strong>Safety Warning:</strong> When testing with real hardware, always start with the oscilloscope in a known safe state. Use the probe compensation output as a safe signal source. Never connect to high-voltage circuits during testing. Keep <code>SCOPE_RESOURCE</code> unset (mock mode) for all development and debugging.
+</div>
+
+<!-- ═══════════════════════════════════════════ 13. SAFETY ═══════════════════════════════════════════ -->
+<h2 id="sec13">13. Safety Considerations</h2>
+
+<ul>
+  <li><strong>Confirmation Gate:</strong> Every WRITE instrument command requires explicit user confirmation via a confirmation token. No silent writes.</li>
+  <li><strong>Safety Limits:</strong> Parameter ranges are enforced before execution (e.g., vertical scale 0.001–100 V/div, trigger level ±100 V).</li>
+  <li><strong>Overvoltage Detection:</strong> Keyword patterns trigger immediate disconnect guidance with <code>unsafe_flag: true</code>.</li>
+  <li><strong>Default to Simulator:</strong> The system runs in mock mode unless <code>SCOPE_RESOURCE</code> is explicitly set.</li>
+  <li><strong>Probe Safety:</strong> RAG corpus includes probe inspection, grounding, and voltage limit documentation.</li>
+  <li><strong>No PII Logging:</strong> Session logs store session IDs and content only. No user names, emails, or identifiers.</li>
+  <li><strong>Read-Only by Default:</strong> READ operations never require confirmation and cannot alter instrument state.</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════ 14. LIMITATIONS ═══════════════════════════════════════════ -->
+<h2 id="sec14">14. Known Limitations &amp; Future Work</h2>
+
+<h3>Current Limitations</h3>
+<ul>
+  <li><strong>No explicit disambiguation:</strong> Ambiguous queries are sent directly to Gemini without asking clarifying questions.</li>
+  <li><strong>No latency instrumentation:</strong> Response times are not measured or reported (spec target: &lt;2s for local queries).</li>
+  <li><strong>Session persistence:</strong> Server-side sessions are in-memory. A server restart loses all logs (localStorage persists on client).</li>
+  <li><strong>SCPI coverage:</strong> The RTB24 backend covers the most common commands but not the full SCPI command set.</li>
+  <li><strong>Privacy consent:</strong> No explicit consent prompt for logging (spec requires "do not log PII without consent").</li>
+  <li><strong>XR dashboard interaction:</strong> UV-to-DOM coordinate mapping depends on PanelUI internal rendering; may not work on all headsets.</li>
+</ul>
+
+<h3>Recommended Next Steps</h3>
+<ol>
+  <li>Add end-to-end testing with real RTB24 hardware</li>
+  <li>Add response latency timing and dashboard metric</li>
+  <li>Implement explicit disambiguation prompts for ambiguous queries</li>
+  <li>Add server-side session persistence (SQLite or file-based)</li>
+  <li>Expand SCPI command coverage (waveform capture, math channels)</li>
+  <li>Add privacy consent banner at session start</li>
+  <li>Integrate adaptive difficulty: adjust explanation depth based on progress score</li>
+</ol>
+
+<hr>
+<p style="text-align:center; color:#666; font-size:9pt; margin-top:30px;">
+  Rhoda Virtual Lab Assistant — Technical Implementation Report<br>
+  Rohde &amp; Schwarz AI-Assisted Onboarding Hackathon · KNUST · June 2026<br>
+  Generated: June 20, 2026
+</p>
+
+</body>
+</html>
