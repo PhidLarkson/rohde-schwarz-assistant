@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rhoda — Instructor Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0d1117; --surface: #161b22; --border: #30363d;
+      --text: #e6edf3; --muted: #8b949e; --accent: #00d4aa;
+      --danger: #f85149; --warn: #d29922;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 24px; }
+    h1 { font-size: 24px; color: var(--accent); margin-bottom: 4px; }
+    .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 13px; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; letter-spacing: 0.5px; }
+    .stat { font-size: 32px; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 12px; color: var(--muted); }
+    .stat-row { display: flex; gap: 24px; margin-bottom: 12px; }
+    .stat-item { text-align: center; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; color: var(--muted); border-bottom: 1px solid var(--border); padding: 8px 12px; font-weight: 600; }
+    td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    tr:hover td { background: #ffffff08; }
+    .badge { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 3px; }
+    .badge-error { background: #f8514933; color: var(--danger); }
+    .badge-fault { background: #d2992233; color: var(--warn); }
+    .badge-ok { background: #00d4aa33; color: var(--accent); }
+    .topic-bar { margin-bottom: 8px; }
+    .topic-bar .label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+    .topic-bar .bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 3px; }
+    .topic-bar .fill { height: 100%; background: var(--accent); border-radius: 3px; }
+    .transcript { max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; white-space: pre-wrap; }
+    .log-user { color: #79c0ff; }
+    .log-assistant { color: var(--accent); }
+    .log-system { color: var(--warn); }
+    .log-tool { color: #d2a8ff; }
+    button { padding: 8px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 13px; }
+    button:hover { border-color: var(--accent); }
+    .actions { margin-bottom: 16px; display: flex; gap: 8px; }
+    #status { color: var(--muted); font-size: 12px; margin-left: auto; }
+  </style>
+</head>
+<body>
+  <h1>Instructor Dashboard</h1>
+  <p class="subtitle">Rhoda — R&S Virtual Lab Assistant Session Analytics</p>
+  <div class="actions">
+    <button onclick="refresh()">Refresh</button>
+    <button onclick="exportAll()">Export All Transcripts</button>
+    <span id="status">Loading...</span>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h2>Session Overview</h2>
+      <div class="stat-row">
+        <div class="stat-item"><div class="stat" id="total-turns">0</div><div class="stat-label">Total Turns</div></div>
+        <div class="stat-item"><div class="stat" id="total-logs">0</div><div class="stat-label">Log Events</div></div>
+        <div class="stat-item"><div class="stat" id="total-errors">0</div><div class="stat-label">Errors</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Competency Progress</h2>
+      <div id="progress-bars"></div>
+    </div>
+    <div class="card">
+      <h2>Common Failure Points</h2>
+      <div id="failure-list"></div>
+    </div>
+    <div class="card">
+      <h2>Recommended Next Topic</h2>
+      <div id="next-topic" style="font-size:18px;color:var(--accent);margin-top:8px">—</div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:16px">
+    <h2>Session Transcript</h2>
+    <div class="transcript" id="transcript">Loading...</div>
+  </div>
+
+  <script>
+    const API = 'http://localhost:5001';
+
+    async function fetchJSON(url) {
+      try { const r = await fetch(url); return r.ok ? r.json() : null; } catch { return null; }
+    }
+
+    async function refresh() {
+      document.getElementById('status').textContent = 'Refreshing...';
+
+      const [logs, progress, failures] = await Promise.all([
+        fetchJSON(`${API}/api/session/logs`),
+        fetchJSON(`${API}/api/session/progress`),
+        fetchJSON(`${API}/api/session/failure-points`),
+      ]);
+
+      if (logs) {
+        document.getElementById('total-logs').textContent = logs.count || 0;
+        const turns = (logs.logs || []).filter(l => l.role === 'user' || l.role === 'assistant');
+        document.getElementById('total-turns').textContent = turns.length;
+
+        const transcriptEl = document.getElementById('transcript');
+        transcriptEl.innerHTML = (logs.logs || []).map(l => {
+          const cls = `log-${l.role || 'system'}`;
+          const ts = (l.timestamp || l.server_timestamp || '').substring(11, 19);
+          const role = (l.role || '?').toUpperCase();
+          const content = l.tool_call
+            ? `TOOL: ${l.tool_call.name} (${l.tool_call.category}) confirmed=${l.confirmed ?? '?'}`
+            : l.content || '';
+          return `<span class="${cls}">[${ts}] ${role}: ${content}</span>`;
+        }).join('\n');
+      }
+
+      if (progress) {
+        const bars = document.getElementById('progress-bars');
+        const scores = progress.topic_scores || {};
+        bars.innerHTML = Object.entries(scores).map(([topic, score]) =>
+          `<div class="topic-bar">
+            <div class="label"><span>${topic}</span><span>${score}</span></div>
+            <div class="bar"><div class="fill" style="width:${Math.min(score, 100)}%"></div></div>
+          </div>`
+        ).join('') || '<p style="color:var(--muted);font-size:12px">No data yet</p>';
+
+        document.getElementById('next-topic').textContent = progress.recommended_next || '—';
+      }
+
+      if (failures) {
+        document.getElementById('total-errors').textContent = failures.total_errors || 0;
+        const list = document.getElementById('failure-list');
+        const faults = failures.common_faults || [];
+        if (faults.length === 0) {
+          list.innerHTML = '<p style="color:var(--muted);font-size:12px">No failures recorded</p>';
+        } else {
+          list.innerHTML = '<table><tr><th>Issue</th><th>Count</th></tr>' +
+            faults.map(([desc, count]) =>
+              `<tr><td>${desc}</td><td><span class="badge badge-fault">${count}</span></td></tr>`
+            ).join('') + '</table>';
+        }
+      }
+
+      document.getElementById('status').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    }
+
+    async function exportAll() {
+      const r = await fetch(`${API}/api/session/transcript`);
+      if (!r.ok) return;
+      const text = await r.text();
+      const blob = new Blob([text], { type: 'text/plain' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'rhoda-transcript-all.txt';
+      a.click();
+    }
+
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>

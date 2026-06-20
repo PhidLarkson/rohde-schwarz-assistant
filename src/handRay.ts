@@ -6,33 +6,46 @@ import * as THREE from 'three';
  * to help users see what they're pointing at and enable UI selection.
  */
 export class HandRaySystem extends createSystem() {
-  private leftRay: THREE.Line | null = null;
-  private rightRay: THREE.Line | null = null;
-  private rayMaterial!: THREE.LineBasicMaterial;
+  private leftRay: THREE.Mesh | null = null;
+  private rightRay: THREE.Mesh | null = null;
+  private leftMaterial!: THREE.MeshBasicMaterial;
+  private rightMaterial!: THREE.MeshBasicMaterial;
   private raycaster = new THREE.Raycaster();
-  private tempMatrix = new THREE.Matrix4();
-  private rayLength = 3; // 3 meters
+  private rayLength = 3;
+  private hitDot: THREE.Mesh | null = null;
 
   init() {
-    // Create material for the pointer rays (cyan color, semi-transparent)
-    this.rayMaterial = new THREE.LineBasicMaterial({
-      color: 0x00ffff,
-      transparent: true,
-      opacity: 0.6,
-      linewidth: 2,
-    });
+    const makeRayMesh = () => {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        transparent: true,
+        opacity: 0.5,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const geo = new THREE.CylinderGeometry(0.002, 0.0005, this.rayLength, 6, 1, true);
+      geo.rotateX(Math.PI / 2);
+      geo.translate(0, 0, -this.rayLength / 2);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = 999;
+      mesh.frustumCulled = false;
+      mesh.visible = false;
+      return { mesh, mat };
+    };
 
-    // Create ray lines
-    const rayGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, -this.rayLength),
-    ]);
+    const left = makeRayMesh();
+    const right = makeRayMesh();
+    this.leftRay = left.mesh;
+    this.rightRay = right.mesh;
+    this.leftMaterial = left.mat;
+    this.rightMaterial = right.mat;
 
-    this.leftRay = new THREE.Line(rayGeometry, this.rayMaterial);
-    this.rightRay = new THREE.Line(rayGeometry.clone(), this.rayMaterial);
-
-    this.leftRay.visible = false;
-    this.rightRay.visible = false;
+    const dotGeo = new THREE.SphereGeometry(0.008, 8, 8);
+    const dotMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, depthTest: false });
+    this.hitDot = new THREE.Mesh(dotGeo, dotMat);
+    this.hitDot.visible = false;
+    this.hitDot.renderOrder = 1000;
+    this.scene.add(this.hitDot);
 
     this.scene.add(this.leftRay);
     this.scene.add(this.rightRay);
@@ -41,41 +54,39 @@ export class HandRaySystem extends createSystem() {
   }
 
   update(_delta: number, _time: number) {
-    // Access XR input sources
     const session = (this.world as any).xrSession;
     if (!session || !session.inputSources) {
-      this.leftRay!.visible = false;
-      this.rightRay!.visible = false;
+      if (this.leftRay) this.leftRay.visible = false;
+      if (this.rightRay) this.rightRay.visible = false;
+      if (this.hitDot) this.hitDot.visible = false;
       return;
     }
 
     let leftHandFound = false;
     let rightHandFound = false;
+    let anyHit = false;
 
-    // Iterate through input sources (hands/controllers)
     for (const inputSource of session.inputSources) {
       const handedness = inputSource.handedness;
       if (handedness !== 'left' && handedness !== 'right') continue;
 
       const ray = handedness === 'left' ? this.leftRay : this.rightRay;
-      if (!ray) continue;
+      const mat = handedness === 'left' ? this.leftMaterial : this.rightMaterial;
+      if (!ray || !mat) continue;
 
-      // Get the grip space (hand/controller position)
-      const gripSpace = inputSource.gripSpace;
-      if (!gripSpace) continue;
+      // Prefer targetRaySpace (pointer direction) over gripSpace
+      const space = inputSource.targetRaySpace || inputSource.gripSpace;
+      if (!space) continue;
 
       const frame = (this.world as any).xrFrame;
       const referenceSpace = (this.world as any).xrReferenceSpace;
       if (!frame || !referenceSpace) continue;
 
       try {
-        const gripPose = frame.getPose(gripSpace, referenceSpace);
-        if (!gripPose) continue;
+        const pose = frame.getPose(space, referenceSpace);
+        if (!pose) continue;
 
-        // Set ray position and orientation
-        const transform = gripPose.transform;
-        const position = transform.position;
-        const orientation = transform.orientation;
+        const { position, orientation } = pose.transform;
 
         ray.position.set(position.x, position.y, position.z);
         ray.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
@@ -84,119 +95,98 @@ export class HandRaySystem extends createSystem() {
         if (handedness === 'left') leftHandFound = true;
         else rightHandFound = true;
 
-        // Perform raycasting to detect UI/objects
-        this.raycaster.set(
-          new THREE.Vector3(position.x, position.y, position.z),
-          new THREE.Vector3(0, 0, -1).applyQuaternion(ray.quaternion)
-        );
+        const origin = new THREE.Vector3(position.x, position.y, position.z);
+        const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(ray.quaternion).normalize();
+        this.raycaster.set(origin, direction);
+        this.raycaster.far = this.rayLength;
 
-        // Check intersection with all interactable objects
         const interactables: THREE.Object3D[] = [];
 
-        // Dashboard
         const dashboardAnchor = (this.world as any).dashboardAnchor;
         if (dashboardAnchor && dashboardAnchor.visible) {
           interactables.push(dashboardAnchor);
         }
 
-        // Rhode Schwarz character
         const rsMesh = (this.world as any).rhodeSchwarzMesh;
-        if (rsMesh) {
-          interactables.push(rsMesh);
-        }
+        if (rsMesh) interactables.push(rsMesh);
 
         if (interactables.length > 0) {
           const intersects = this.raycaster.intersectObjects(interactables, true);
           if (intersects.length > 0) {
             const hit = intersects[0];
+            anyHit = true;
 
-            // Check if it's dashboard or character
+            if (this.hitDot) {
+              this.hitDot.position.copy(hit.point);
+              this.hitDot.visible = true;
+            }
+
             if (hit.object.userData.isDashboard) {
-              // Dashboard hit
-              this.rayMaterial.color.set(0x00ff00); // Green for dashboard
+              mat.color.set(0x00ff00);
+              mat.opacity = 0.8;
               (this.world as any).lastDashboardIntersect = hit;
               (this.world as any).lastRhodeSchwarzIntersect = null;
             } else if (hit.object.userData.interactable) {
-              // Character hit
-              this.rayMaterial.color.set(0xffff00); // Yellow for character
+              mat.color.set(0xffff00);
+              mat.opacity = 0.8;
               (this.world as any).lastRhodeSchwarzIntersect = hit;
               (this.world as any).lastDashboardIntersect = null;
             }
           } else {
-            this.rayMaterial.color.set(0x00ffff); // Cyan default
+            mat.color.set(0x00ffff);
+            mat.opacity = 0.5;
             (this.world as any).lastDashboardIntersect = null;
             (this.world as any).lastRhodeSchwarzIntersect = null;
           }
         }
       } catch (err) {
-        console.warn('Hand ray update error:', err);
+        // silently skip frame errors
       }
     }
 
-    // Hide rays for hands that aren't present
     if (!leftHandFound && this.leftRay) this.leftRay.visible = false;
     if (!rightHandFound && this.rightRay) this.rightRay.visible = false;
+    if (!anyHit && this.hitDot) this.hitDot.visible = false;
   }
 
-  // Helper to simulate clicks on dashboard buttons based on UV coordinates
   public static handleSelect(world: any) {
     const intersect = (world as any).lastDashboardIntersect;
     if (!intersect || !intersect.uv) return;
 
     const uv = intersect.uv;
-    // Invert Y because UV origin is bottom-left, DOM is top-left
     const x = uv.x;
     const y = 1 - uv.y;
 
     console.log(`🎯 Dashboard hit at UV: ${x.toFixed(2)}, ${y.toFixed(2)}`);
 
-    // List of interactive elements to check (keep in sync with dashboard.uikitml)
-    const buttonIds = ['btn-listen', 'btn-summon', 'btn-learn-phrase', 'btn-quiz', 'toggle-autofollow'];
+    const buttonIds = [
+      'btn-talk', 'btn-lang', 'btn-identify', 'btn-summon',
+      'btn-follow', 'btn-reset', 'btn-allow', 'btn-deny',
+    ];
 
-    // Find the dashboard container (it's usually the first .panel-container or similar in the DOM)
-    // Since we don't have direct access to the internal PanelUI DOM structure easily,
-    // we'll try to find the elements by ID and check their relative positions.
-    // Note: This assumes the elements are in the document (PanelUI usually keeps them there).
-
-    // We need to find the root element of the dashboard to normalize coordinates
-    // The dashboard.uikitml root typically has a glass-card wrapper
-    // Cache root lookup but fall back gracefully
     let root: Element | null = null;
     try {
-      root = document.querySelector('.glass-card') || document.querySelector('.panel-root') || document.body;
-    } catch (err) {
-      console.warn('Error querying dashboard root element', err);
+      root = document.querySelector('.panel') || document.querySelector('[class*="panel"]') || document.body;
+    } catch (_) {
       root = document.body;
     }
-    if (!root) {
-      console.warn('Dashboard root element (.glass-card) not found in DOM');
-      return;
-    }
+    if (!root) return;
 
     const rootRect = root.getBoundingClientRect();
     const clickX = rootRect.left + x * rootRect.width;
     const clickY = rootRect.top + y * rootRect.height;
 
-    // Check which button is under this position
     for (const id of buttonIds) {
       const el = document.getElementById(id);
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        // Check if click point is within this element's rect
-        if (clickX >= rect.left && clickX <= rect.right &&
-          clickY >= rect.top && clickY <= rect.bottom) {
-
-          console.log(`🖱️ Virtual click on #${id}`);
-          el.click();
-
-          // Visual feedback
-          el.classList.add('active');
-          setTimeout(() => el.classList.remove('active'), 200);
-          return;
-        }
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (clickX >= rect.left && clickX <= rect.right &&
+        clickY >= rect.top && clickY <= rect.bottom) {
+        console.log(`🖱️ Virtual click on #${id}`);
+        el.click();
+        return;
       }
     }
-    console.log('No button found at this position');
   }
 
   cleanup() {

@@ -123,6 +123,7 @@ World.create(document.getElementById("scene-container") as HTMLDivElement, {
   });
   // Keep it interactable but do not add a Follower component so it stays put
   dashboardEntity.addComponent(Interactable);
+  dashboardEntity.addComponent(OneHandGrabbable);
 
   // Make dashboard meshes interactable
   dashboardAnchor.traverse((child: any) => {
