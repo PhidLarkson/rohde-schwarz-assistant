@@ -114,7 +114,7 @@
 
 <p>Rhoda is a conversational AI virtual lab assistant designed to guide KNUST electrical engineering students through Rohde &amp; Schwarz oscilloscope procedures. The system combines an XR avatar with voice interaction, a text-based chat interface, retrieval-augmented generation (RAG), real-time instrument control with safety-gated confirmation, anomaly detection for trace diagnosis, and adaptive progress tracking — delivering a complete Track 2 solution for the R&amp;S AI-Assisted Onboarding hackathon.</p>
 
-<p>The implementation spans <strong>6,326 lines of source code</strong> across 22 TypeScript modules and 6 Python modules, with a 10-document RAG corpus, 45 GLB animation assets, and 11 automated backend tests. The system supports both simulated and real R&amp;S RTB24 oscilloscope hardware via USB or LAN connections.</p>
+<p>The implementation spans <strong>6,720 lines of source code</strong> across 22 TypeScript modules and 6 Python modules, with a 10-document RAG corpus, 45 GLB animation assets, and 11 automated backend tests. The system supports both simulated and real R&amp;S RTB24 oscilloscope hardware via USB or LAN connections.</p>
 
 <div class="highlight">
 <strong>Key deliverables met:</strong> Two guided workflows (simple + safety-critical), voice and text chat interfaces, safety-gated instrument configuration with explicit confirmation, conversation transcript export, instructor dashboard with failure point analytics, and comprehensive documentation for connecting to instruments or simulator.
@@ -124,10 +124,10 @@
 <h2 id="sec2">2. Project Metrics</h2>
 
 <div class="metric-grid">
-  <div class="metric"><div class="value">6,326</div><div class="label">Lines of Code</div></div>
+  <div class="metric"><div class="value">6,720</div><div class="label">Lines of Code</div></div>
   <div class="metric"><div class="value">22</div><div class="label">TypeScript Modules</div></div>
   <div class="metric"><div class="value">6</div><div class="label">Python Modules</div></div>
-  <div class="metric"><div class="value">10</div><div class="label">RAG Corpus Docs</div></div>
+  <div class="metric"><div class="value">15</div><div class="label">RAG Corpus Docs</div></div>
   <div class="metric"><div class="value">45</div><div class="label">GLB Animations</div></div>
   <div class="metric"><div class="value">11</div><div class="label">Backend Tests</div></div>
   <div class="metric"><div class="value">13</div><div class="label">API Endpoints</div></div>
@@ -699,7 +699,7 @@ npx vite</pre>
 </div>
 
 <div class="flow-step">
-  <div class="flow-num">10</div>
+  <div class="flow-num">15</div>
   <div class="flow-content">
     <h4>Export Transcript</h4>
     <p>Click "Export Transcript" in the chat sidebar. Verify the JSON file contains all conversation turns, tool calls, and confirmation events with timestamps.</p>
