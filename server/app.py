@@ -32,11 +32,17 @@ CORS(app)
 from instrument.scope_client import build_mock_client, build_rs_instrument_client, discover_usb_instruments
 
 SCOPE_RESOURCE = os.environ.get("SCOPE_RESOURCE")
+SCOPE_SIMULATE = os.environ.get("SCOPE_SIMULATE", "").lower() in ("1", "true", "yes")
 if SCOPE_RESOURCE:
-    print(f"🔬 Instrument: connecting to {SCOPE_RESOURCE}")
-    scope = build_rs_instrument_client(SCOPE_RESOURCE)
+    print(f"🔬 Instrument: connecting to {SCOPE_RESOURCE}" + (" (simulation)" if SCOPE_SIMULATE else ""))
+    try:
+        scope = build_rs_instrument_client(SCOPE_RESOURCE, simulate=SCOPE_SIMULATE)
+    except Exception as e:
+        print(f"🔬 Instrument: connection failed — {e}")
+        print("🔬 Instrument: falling back to simulator")
+        scope = build_mock_client()
 else:
-    print("🔬 Instrument: mock mode (set SCOPE_RESOURCE for real hardware)")
+    print("🔬 Instrument: simulator (set SCOPE_RESOURCE=USB for real hardware)")
     scope = build_mock_client()
 
 
@@ -50,11 +56,13 @@ def _op(r):
 
 
 @app.route("/api/instrument/state", methods=["GET"])
+@app.route("/api/state", methods=["GET"])
 def instrument_state():
     return jsonify(_op(scope.read_state(scope=request.args.get("scope", "all"))))
 
 
 @app.route("/api/instrument/set", methods=["POST"])
+@app.route("/api/set", methods=["POST"])
 def instrument_set():
     d = request.get_json(force=True)
     return jsonify(_op(scope.set_parameter(
@@ -65,6 +73,7 @@ def instrument_set():
 
 
 @app.route("/api/instrument/measure", methods=["POST"])
+@app.route("/api/measure", methods=["POST"])
 def instrument_measure():
     d = request.get_json(force=True)
     return jsonify(_op(scope.run_measurement(
@@ -76,6 +85,7 @@ def instrument_measure():
 
 
 @app.route("/api/instrument/confirm", methods=["POST"])
+@app.route("/api/confirm", methods=["POST"])
 def instrument_confirm():
     d = request.get_json(force=True)
     return jsonify(_op(scope.set_parameter(

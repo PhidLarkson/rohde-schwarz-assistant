@@ -978,27 +978,22 @@ export class RhodeSchwarzAssistant {
     }
 
     this.currentState = 'SPEAKING';
-    this.setSpeakingVisual(true);
     this.audioFeedback.speaking();
     this.setStatusLabel('Generating...');
 
     try {
       const audio = await geminiTTS(text);
-      // Animation switches inside playAudioBlob when audio actually starts
       this.setStatusLabel('Speaking...');
+      // playAudioBlob handles: start talking animation → lip sync → onended → back to idle
       await this.playAudioBlob(audio);
     } catch (err) {
       console.error('❌ TTS failed:', err);
+      if (this.idleAction) this.switchAnimation(this.idleAction, 0.3);
     }
 
     this.currentState = 'READY';
-    this.setSpeakingVisual(false);
     this.audioFeedback.ready();
     this.setStatusLabel('Ready');
-
-    if (this.idleAction) {
-      this.switchAnimation(this.idleAction, 0.5);
-    }
 
     if (!this.muted) {
       setTimeout(() => void this.startListening(), 400);
@@ -1096,58 +1091,35 @@ export class RhodeSchwarzAssistant {
 
   private async speak(text: string, language: string = 'tw') {
     this.currentState = 'SPEAKING';
-    this.setSpeakingVisual(true);
     this.audioFeedback.speaking();
-    this.setStatusLabel('Speaking...');
-
-    // Stay in idle while generating audio
-    console.log('🎬 Staying in idle while generating TTS audio...');
+    this.setStatusLabel('Generating...');
 
     try {
-      // Generate speech using GhanaNLP TTS
       const audioBlob = await textToSpeech(text, language);
       if (!audioBlob) {
-        console.warn('⚠️ No TTS audio generated');
         this.currentState = 'READY';
-        this.setSpeakingVisual(false);
         this.audioFeedback.ready();
-        this.setStatusLabel('Sorry, I cannot speak right now');
+        this.setStatusLabel('TTS unavailable');
         return;
       }
 
-      // Use Web Audio API for XR-compatible playback
-      // Animation switching happens inside playAudioBlob
       this.setStatusLabel('Speaking...');
+      // playAudioBlob handles: start talking animation → lip sync → onended → back to idle
       await this.playAudioBlob(audioBlob);
 
-      console.log('✅ TTS playback finished');
       this.currentState = 'READY';
-      this.setSpeakingVisual(false);
       this.audioFeedback.ready();
       this.setStatusLabel('READY');
 
-      // After speaking completes, automatically resume listening if not muted
-      try {
-        if (!this.muted) {
-          // small delay so UI updates first
-          setTimeout(() => {
-            void this.startListening();
-          }, 400);
-        }
-      } catch (e) {
-        console.warn('⚠️ Failed to auto-resume listening after speaking:', e);
+      if (!this.muted) {
+        setTimeout(() => void this.startListening(), 400);
       }
     } catch (err) {
       console.error('❌ TTS error:', err);
       this.currentState = 'READY';
-      this.setSpeakingVisual(false);
       this.audioFeedback.error();
       this.setStatusLabel('Message failed');
-
-      // Switch back to idle on error (unless dancing)
-      if (this.idleAction) {
-        this.switchAnimation(this.idleAction, 0.5);
-      }
+      if (this.idleAction) this.switchAnimation(this.idleAction, 0.3);
     }
   }
 
@@ -1238,11 +1210,12 @@ export class RhodeSchwarzAssistant {
 
         this.currentAudioSource = source;
 
+        // Start talking animation + lip sync together, right before audio plays
         if (this.talkingAction) {
-          this.switchAnimation(this.talkingAction, 0.2);
+          this.talkingAction.reset().setLoop(THREE.LoopRepeat, Infinity);
+          this.switchAnimation(this.talkingAction, 0.15);
         }
 
-        // --- NATURAL LIP SYNC ANIMATOR ---
         if (this.analyser && this.analyserData && this.mouthMesh) {
           const animateMouth = () => {
             try {

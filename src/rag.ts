@@ -313,6 +313,118 @@ Fix:
 
 Rule of thumb: If changing the timebase changes the apparent signal shape or frequency, aliasing is likely the cause.`,
   },
+
+  // ── RTB2-SPECIFIC PROCEDURES (from User Manual) ──
+  {
+    id: 'rtb2-remote-control',
+    title: 'RTB2 Remote Control via SCPI',
+    category: 'procedure',
+    keywords: ['remote', 'control', 'scpi', 'usb', 'lan', 'connect', 'python', 'rsinstrument', 'visa', 'command'],
+    content: `RTB2 Remote Control Setup
+
+Connect to the RTB2 via USB TMC or LAN using RsInstrument (Python):
+  pip install RsInstrument pyvisa-py
+
+Connection: from RsInstrument import RsInstrument
+  instr = RsInstrument('USB::0x0AAD::0x01D6::102345::INSTR')
+  print(instr.idn_string)
+
+Key SCPI commands:
+- *IDN? — identification (returns Rohde&Schwarz,RTB2004,...)
+- *RST — reset to defaults
+- AUToscale — automatic waveform setup
+- RUN / STOP — start/stop acquisition
+- ACQuire:STATe? — returns RUN|STOPping|COMPlete|BREak
+- CHANnel<m>:STATe ON|OFF — enable/disable channel
+- CHANnel<m>:SCALe <V/div> — vertical scale (1e-3 to 10)
+- CHANnel<m>:COUPling DCLimit|ACLimit|GND
+- TIMebase:SCALe <s/div> — horizontal scale (1e-9 to 50)
+- TRIGger:A:SOURce CH1..CH4
+- TRIGger:A:LEVel1:VALue <volts>
+- TRIGger:A:EDGE:SLOPe POSitive|NEGative|EITHer
+- TRIGger:A:MODE AUTO|NORMal
+- MEASurement<m>:MAIN FREQuency|PEAK|RMS|MEAN
+- MEASurement<m>:ENABle ON
+- MEASurement<m>:RESult:ACTual? — read result (9.9E37 = no signal)`,
+  },
+  {
+    id: 'rtb2-front-panel',
+    title: 'RTB2 Front Panel Components',
+    category: 'procedure',
+    keywords: ['front', 'panel', 'button', 'knob', 'port', 'connector', 'bnc', 'input', 'probe', 'comp', 'usb', 'display', 'rtb'],
+    content: `R&S RTB2 Front Panel Overview (RTB22: 2 channels, RTB24: 4 channels)
+
+Input connectors (bottom):
+- CH1 to CH4: BNC analog inputs
+- Ext. Trigger In: external trigger input (BNC)
+- Probe Comp: 1 kHz square wave output for probe calibration
+- Aux Out: auxiliary output
+- Logic Channels: D0-D15 digital inputs (MSO option)
+- Pattern Generator: P0-P3 digital pattern outputs (option RTB-B6)
+- USB port: for saving screenshots/data to USB flash drive
+
+Front panel keys:
+- Run Stop: continuous acquisition on/off
+- Single: single trigger acquisition
+- Autoset: auto-detect signal and optimize display
+- Default: factory reset
+- Horizontal: Scale knob (time/div), Position knob (trigger offset)
+- Vertical: Scale knob (V/div), Position knob (offset) per channel
+- Trigger: Level knob, Source/Slope/Mode buttons
+- Analysis: Measure, Cursor, Math, Search
+
+Display: 10.1" capacitive touchscreen (1280x800)
+
+Rear panel: LAN (RJ45), USB Device (TMC remote control), USB Host, optional GPIB`,
+  },
+  {
+    id: 'rtb2-measurements',
+    title: 'RTB2 Measurement Types',
+    category: 'procedure',
+    keywords: ['measurement', 'measure', 'frequency', 'peak', 'rms', 'mean', 'period', 'rise', 'fall', 'quick', 'automatic', 'rtb'],
+    content: `R&S RTB2 Measurement System
+
+Quick Measurements (all at once):
+- Start: MEASurement<m>:AON
+- Returns PEAK(Vpp), UPE(V+), LPE(V-), CYCR(RMS), CYCM(Mean), PER(period), FREQ(frequency), RTIM(rise time), FTIM(fall time)
+- Query: MEASurement<m>:ARESult?
+
+Automatic Measurements (up to 8 slots):
+- Set type: MEASurement<m>:MAIN <type>
+- Available: FREQuency, PERiod, PEAK, UPEakvalue, LPEakvalue, AMPLitude, MEAN, RMS, HIGH, LOW, RTIMe, FTIMe, PDCYcle, NDCYcle, PPWidth, NPWidth, CYCMean, CYCRms, STDDev, DELay, PHASe
+- Source: MEASurement<m>:SOURce CH1..CH4
+- Enable: MEASurement<m>:ENABle ON
+- Result: MEASurement<m>:RESult:ACTual? (9.9E37 = no signal/NaN)
+
+Setup time: after changing parameters, wait ~200ms + acquisition time before reading. Use MEASurement<m>:TIMeout:AUTO ON for automatic handling.
+
+Statistics: MEASurement<m>:STATistics:ENABle ON, then query :RESult:AVG? and :RESult:STDDev?`,
+  },
+  {
+    id: 'rtb2-voltage-safety',
+    title: 'RTB2 Voltage Limits and Safety',
+    category: 'safety',
+    keywords: ['voltage', 'limit', 'safety', 'hazardous', 'maximum', 'input', 'probe', 'ground', 'cat', 'rtb', 'short', 'circuit'],
+    content: `R&S RTB2 Voltage Safety (from Getting Started Manual)
+
+Hazardous voltage thresholds: >30V RMS, >42V peak, or >60V DC.
+
+Maximum input voltage:
+- With 10:1 passive probe (RT-ZP10): 300V CAT II at probe tip
+- With 1:1 setting: limited by oscilloscope channel (~200V peak)
+- Rated voltage depends on frequency — check specs document
+
+Critical safety rules:
+1. Set correct probe attenuation on the instrument — wrong setting means displayed voltage doesn't match actual voltage
+2. NEVER connect ground clip to a point with voltage relative to earth ground — this shorts through the oscilloscope's ground path
+3. Switch off test circuit before connecting/disconnecting probes
+4. Do not touch exposed connections when power is applied
+5. Set up all probe connections before applying power to circuit
+6. Use only probes matching the measurement category (CAT) rating
+7. For differential measurements between non-ground points, use differential probe or Math CH1-CH2 subtraction
+
+The oscilloscope is designed for measurements on circuits that are only indirectly connected to mains or not connected at all. It is not rated for any measurement category.`,
+  },
 ];
 
 function scoreMatch(doc: Document, queryWords: string[]): number {

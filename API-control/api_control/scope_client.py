@@ -3,9 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .backends import MockScopeBackend, ScopeBackend
+from .backends import MockScopeBackend, RsInstrumentBackend, ScopeBackend
 from .confirmation import ConfirmationGate
-
 
 try:
     from RsInstrument import RsInstrument  # type: ignore
@@ -166,53 +165,34 @@ def build_mock_client() -> ScopeClient:
     return ScopeClient(MockScopeBackend())
 
 
+def discover_usb_instruments() -> list[str]:
+    if RsInstrument is None:
+        return []
+    try:
+        resources = RsInstrument.list_resources("?*")
+        return [r for r in resources if r] if resources else []
+    except Exception:
+        return []
+
+
 def build_rs_instrument_client(
     resource_name: str,
     reset: bool = False,
     id_query: bool = True,
 ) -> ScopeClient:
     if RsInstrument is None:
-        raise RuntimeError("RsInstrument is not installed in this environment")
+        raise RuntimeError("RsInstrument is not installed — pip install RsInstrument")
 
-    class RsInstrumentBackend:
-        def __init__(self, instrument: Any) -> None:
-            self._instrument = instrument
-
-        def read_state(
-            self,
-            scope: str,
-            keys: list[str] | None = None,
-        ) -> dict[str, Any]:
-            return {
-                "resource_name": resource_name,
-                "idn": self._instrument.query_str("*IDN?"),
-                "scope": scope,
-                "keys": keys,
-            }
-
-        def set_parameter(self, path: str, value: Any) -> None:
-            self._instrument.write_str(f"{path} {value}")
-
-        def run_measurement(
-            self,
-            measurement_type: str,
-            source: str | None = None,
-            gate: dict[str, Any] | None = None,
-        ) -> dict[str, Any]:
-            query = f"MEAS:{measurement_type}?"
-            if source:
-                query = f"MEAS:{measurement_type}? {source}"
-            value = self._instrument.query_str(query)
-            return {
-                "measurement_type": measurement_type,
-                "source": source,
-                "gate": gate,
-                "value": value,
-                "status": "ok",
-            }
+    if resource_name.upper() in ("USB", "AUTO"):
+        resources = discover_usb_instruments()
+        if not resources:
+            raise RuntimeError("No VISA instruments found. Check USB connection and drivers.")
+        resource_name = resources[0]
+        print(f"  Auto-discovered instrument: {resource_name}")
 
     instrument = RsInstrument(resource_name, id_query=id_query, reset=reset)
-    return ScopeClient(RsInstrumentBackend(instrument))
+    backend = RsInstrumentBackend(instrument)
+    return ScopeClient(backend)
 
 
 def _lookup_path(state: dict[str, Any], path: str) -> Any:
