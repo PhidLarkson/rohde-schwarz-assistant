@@ -87,8 +87,5 @@ service-account*.json
 # LibreOffice lock files
 .~lock.*
 
-# Large vendor documentation and hackathon briefs (keep locally, don't push)
-docs/RTB24-*/
-docs/HACKATHON_AIAssistedOnboarding_KNUST_tracks.pdf
-docs/Lab_Assistant_Build_Spec*.docx
-docs/.~lock.*
+# Documentation (sensitive/large — keep local only)
+docs/
