@@ -17,7 +17,13 @@ const gemini = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 if (!GHANANLP_API_KEY || !GEMINI_API_KEY) {
   console.warn('⚠️ API Keys missing! Check .env file.');
 }
-const SYSTEM_INSTRUCTION = 'You are Rhoda, a virtual lab assistant for Rohde & Schwarz oscilloscopes at KNUST. You guide students through measurements, explain instrument controls, and flag safety concerns. Keep responses clear, technical, and under 60 words.';
+const SYSTEM_INSTRUCTION = `You are Rhoda, a virtual lab assistant for Rohde & Schwarz oscilloscopes at KNUST.
+You guide students through measurements, explain instrument controls, and flag safety concerns.
+Keep responses clear, technical, and under 60 words.
+
+When you need to change an oscilloscope setting, say exactly what you want to change and ask the student to confirm before proceeding.
+If you detect a safety concern, warn the student immediately.
+If context documents are provided below, use them to ground your response.`;
 
 /**
  * Transcribe audio to text using GhanaNLP ASR v1
@@ -245,12 +251,21 @@ export async function translateText(text: string, fromLanguage: string, toLangua
 /**
  * Ask Gemini with English text and get an English response
  */
-export async function askGemini(text: string): Promise<string> {
+export async function askGemini(text: string, ragContext?: string, instrumentState?: string): Promise<string> {
   try {
     console.log(`🤖 [GEMINI] Asking: "${text.substring(0, 50)}..."`);
+
+    let prompt = text;
+    if (ragContext) {
+      prompt = `[REFERENCE DOCUMENTS]\n${ragContext}\n\n[STUDENT QUESTION]\n${text}`;
+    }
+    if (instrumentState) {
+      prompt = `[OSCILLOSCOPE STATE]\n${instrumentState}\n\n${prompt}`;
+    }
+
     const result = await gemini.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: text,
+      contents: prompt,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
         thinkingConfig: { thinkingBudget: 0 }
@@ -266,36 +281,92 @@ export async function askGemini(text: string): Promise<string> {
 }
 
 /**
- * Combined function: Transcribe audio and optionally translate to English
- * This maintains compatibility with the old API interface
+ * Transcribe audio using Gemini (English pipeline — skips GhanaNLP entirely)
  */
-export async function transcribeAndUnderstand(
-  audioBlob: Blob,
-  language: string = 'tw',
-  translateToEnglish: boolean = false
-): Promise<{ transcript: string; response: string }> {
-  try {
-    // Transcribe audio to text
-    const transcript = await transcribeAudio(audioBlob, language);
+export async function geminiTranscribeAudio(audioBlob: Blob): Promise<string> {
+  console.log(`🎤 [GEMINI-STT] Transcribing ${audioBlob.size} bytes...`);
 
-    // If translation is needed and source is not English
-    let response = transcript;
-    if (translateToEnglish && language !== 'en') {
-      try {
-        response = await translateText(transcript, language, 'en');
-      } catch (error) {
-        console.warn('⚠️ [GHANANLP] Translation failed, using original transcript');
-        response = transcript;
-      }
-    }
+  const arrayBuffer = await audioBlob.arrayBuffer();
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
 
-    return { transcript, response };
+  const result = await gemini.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [{
+      role: 'user',
+      parts: [
+        { text: 'Transcribe this audio exactly. Return only the transcribed text, nothing else.' },
+        { inlineData: { mimeType: audioBlob.type || 'audio/webm', data: base64 } },
+      ],
+    }],
+    config: { thinkingConfig: { thinkingBudget: 0 } },
+  });
 
-  } catch (error) {
-    console.error('❌ [GHANANLP] transcribeAndUnderstand error:', error);
-    return {
-      transcript: '[Error: Could not process audio]',
-      response: 'Sorry, I had trouble processing your audio. Please try speaking again.'
-    };
+  const text = (result.text || '').trim();
+  if (!text) throw new Error('No transcription text from Gemini');
+  console.log(`✅ [GEMINI-STT] Transcript: "${text}"`);
+  return text;
+}
+
+/**
+ * Gemini TTS — generates speech audio using Kore voice.
+ * Returns a WAV Blob ready for playback.
+ */
+export async function geminiTTS(text: string): Promise<Blob> {
+  console.log(`🔊 [GEMINI-TTS] Generating speech: "${text.substring(0, 50)}..."`);
+
+  const response = await gemini.models.generateContent({
+    model: 'gemini-2.5-flash-preview-tts',
+    contents: [{ parts: [{ text }] }],
+    config: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: 'Vindemiatrix' },
+        },
+      },
+    },
+  });
+
+  const candidate = response.candidates?.[0];
+  const part = candidate?.content?.parts?.[0];
+  const audioData = (part as any)?.inlineData?.data;
+
+  if (!audioData) {
+    throw new Error('No audio data in Gemini TTS response');
   }
+
+  const raw = atob(audioData);
+  const pcm = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) pcm[i] = raw.charCodeAt(i);
+
+  const wavBlob = pcmToWav(pcm.buffer, 24000, 1, 16);
+  console.log(`✅ [GEMINI-TTS] Generated ${wavBlob.size} bytes of audio`);
+  return wavBlob;
+}
+
+function pcmToWav(pcmData: ArrayBuffer, sampleRate: number, numChannels: number, bitsPerSample: number): Blob {
+  const dataLen = pcmData.byteLength;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const v = new DataView(buf);
+
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i));
+  };
+
+  writeStr(0, 'RIFF');
+  v.setUint32(4, 36 + dataLen, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, numChannels, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * numChannels * (bitsPerSample / 8), true);
+  v.setUint16(32, numChannels * (bitsPerSample / 8), true);
+  v.setUint16(34, bitsPerSample, true);
+  writeStr(36, 'data');
+  v.setUint32(40, dataLen, true);
+  new Uint8Array(buf, 44).set(new Uint8Array(pcmData));
+
+  return new Blob([buf], { type: 'audio/wav' });
 }

@@ -1,9 +1,14 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
-import { transcribeAudio, translateText, askGemini, textToSpeech } from './genai';
+import { transcribeAudio, translateText, askGemini, textToSpeech, geminiTranscribeAudio, geminiTTS } from './genai';
 import { AudioRecorder } from './audioRecorder';
 import { AudioFeedback } from './audioFeedback';
 import manifest from './animation-manifest.json';
+import { sessionLogger } from './session';
+import { getContextForQuery } from './rag';
+import { executeFunction, getInstrumentState, getPendingConfirmation, confirmPending, denyPending } from './instrument';
+import { diagnoseTrace } from './anomaly';
+import { getNudge } from './progress';
 
 export type RhodeSchwarzState = 'READY' | 'LISTENING' | 'PROCESSING' | 'SPEAKING';
 
@@ -62,7 +67,7 @@ export class RhodeSchwarzAssistant {
   private audioRecorder = new AudioRecorder();
   private audioFeedback = new AudioFeedback();
   private currentState: RhodeSchwarzState = 'READY';
-  private muted: boolean = false;
+  private muted: boolean = true;
   private silenceMonitorId: number | null = null;
   private silenceIntervalId: number | null = null;
   private speechThreshold: number = 0.025;
@@ -71,6 +76,7 @@ export class RhodeSchwarzAssistant {
   private fastMode: boolean = false; // when true, short-circuit UI delays and use tighter silence timing
   private isRecording: boolean = false;
   private statusLabel: string = 'READY';
+  private language: 'en' | 'tw' = 'en';
 
 
   /**
@@ -631,6 +637,10 @@ export class RhodeSchwarzAssistant {
     return this.currentState;
   }
 
+  public setState(state: RhodeSchwarzState) {
+    this.currentState = state;
+  }
+
   public isCurrentlyRecording(): boolean {
     return this.isRecording;
   }
@@ -639,7 +649,7 @@ export class RhodeSchwarzAssistant {
     return this.statusLabel;
   }
 
-  private setStatusLabel(label: string) {
+  public setStatusLabel(label: string) {
     if (this.statusLabel === label) return;
     this.statusLabel = label;
     console.log(`📊 [RHODE_SCHWARZ][FLOW] ${label}`);
@@ -650,6 +660,30 @@ export class RhodeSchwarzAssistant {
    */
   public getAudioLevel(): number {
     return this.audioRecorder.getAudioLevel();
+  }
+
+  public getLanguage(): 'en' | 'tw' {
+    return this.language;
+  }
+
+  public setLanguage(lang: 'en' | 'tw') {
+    if (this.language === lang) return;
+    // Stop any active recording before switching
+    if (this.currentState === 'LISTENING' && this.isRecording) {
+      this.isRecording = false;
+      this.audioRecorder.stop().catch(() => {});
+      if (this.silenceMonitorId) { cancelAnimationFrame(this.silenceMonitorId); this.silenceMonitorId = null; }
+      if (this.silenceIntervalId) { clearInterval(this.silenceIntervalId); this.silenceIntervalId = null; }
+    }
+    this.language = lang;
+    this.currentState = 'READY';
+    this.setListeningVisual(false);
+    this.setStatusLabel('READY');
+    console.log(`🌍 Language set to: ${lang === 'en' ? 'English' : 'Twi'}`);
+    // Resume listening if unmuted
+    if (!this.muted) {
+      setTimeout(() => void this.startListening(), 300);
+    }
   }
 
   public onTouched() {
@@ -692,6 +726,8 @@ export class RhodeSchwarzAssistant {
       // Reset speech detection helpers
       this.hasHeardSpeechWhileRecording = false;
       let silenceStart: number | null = null;
+      const recordingStartTime = Date.now();
+      const maxRecordingMs = 15000;
 
       // Create a single-check function so we can run it from RAF and from a setInterval fallback
       const checkSilenceOnce = () => {
@@ -700,12 +736,14 @@ export class RhodeSchwarzAssistant {
             return;
           }
 
-          const level = this.audioRecorder.getAudioLevel();
-          // Debug: occasionally log level in immersive flows to diagnose issues
-          if (this.fastMode && level > 0.001) {
-            console.log('🔎 [SILENCE-MONITOR] audio level:', level.toFixed(3));
-          }
           const now = Date.now();
+          if (now - recordingStartTime > maxRecordingMs) {
+            console.log('⏱️ Max recording duration reached → auto-stopping');
+            void this.stopListening();
+            return;
+          }
+
+          const level = this.audioRecorder.getAudioLevel();
 
           // If user speaks above threshold, register speech and clear silence timer
           if (level >= this.speechThreshold) {
@@ -803,118 +841,234 @@ export class RhodeSchwarzAssistant {
   }
 
   private async processConversation(audioBlob: Blob) {
-    console.log(`🔄 [RHODE_SCHWARZ] ========== PIPELINE START ==========`);
-    console.log(`🔄 [RHODE_SCHWARZ] Audio blob: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+    console.log(`🔄 [RHODE_SCHWARZ] ========== PIPELINE START (${this.language}) ==========`);
 
     if (!audioBlob || audioBlob.size === 0) {
       throw new Error('No audio captured from microphone');
     }
 
-    const sizeKb = (audioBlob.size / 1024).toFixed(1);
-    // Simplified status: keep showing "Thinking..." instead of file size details
     this.setStatusLabel('Thinking...');
 
-    // 1) Transcribe Twi
-    console.log(`📤 [RHODE_SCHWARZ] ========== STEP 1: TRANSCRIPTION (Twi) ==========`);
-    this.setStatusLabel('Thinking...');
+    if (this.language === 'en') {
+      await this.processEnglishPipeline(audioBlob);
+    } else {
+      await this.processTwiPipeline(audioBlob);
+    }
 
-    let twiTranscript: string;
+    console.log(`✅ [RHODE_SCHWARZ] ========== PIPELINE COMPLETE ==========`);
+  }
+
+  private async processEnglishPipeline(audioBlob: Blob) {
+    // 1) Transcribe via Gemini
+    this.setStatusLabel('Listening...');
+    let transcript: string;
     try {
-      const transcriptStart = Date.now();
-      twiTranscript = await transcribeAudio(audioBlob, 'tw');
-      const transcriptTime = Date.now() - transcriptStart;
-      this.currentTranscript = twiTranscript;
-      console.log(`✅ [RHODE_SCHWARZ] Twi transcript (${transcriptTime}ms): "${twiTranscript}"`);
+      transcript = await geminiTranscribeAudio(audioBlob);
+      this.currentTranscript = transcript;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.includes('No transcription')) {
+        this.currentState = 'READY';
+        this.setListeningVisual(false);
+        this.audioFeedback.ready();
+        this.setStatusLabel('Ready');
+        if (!this.muted) setTimeout(() => this.startListening(), 500);
+        return;
+      }
+      throw err;
+    }
 
-      // Show the transcript result
-      // Simplified: don't show raw transcript, just keep thinking
-      // this.setStatusLabel(...);
-    } catch (transcribeError) {
-      const errMsg = (transcribeError as Error).message;
-      if (errMsg.includes('No transcription text') || errMsg.includes('Empty transcription')) {
-        console.warn('⚠️ [RHODE_SCHWARZ] No speech detected in audio');
+    sessionLogger.logUserInput(transcript);
+
+    // 2) Check for confirmation responses
+    const pending = getPendingConfirmation();
+    if (pending) {
+      const lower = transcript.toLowerCase();
+      if (/yes|confirm|proceed|go ahead|allow|okay|ok|do it/.test(lower)) {
+        const result = confirmPending();
+        const msg = `Done. ${JSON.stringify(result.result)}`;
+        sessionLogger.logAssistantResponse(msg);
+        await this.speakAndReset(msg);
+        return;
+      } else if (/no|cancel|deny|stop|don't/.test(lower)) {
+        denyPending();
+        const msg = 'Alright, I cancelled that action.';
+        sessionLogger.logAssistantResponse(msg);
+        await this.speakAndReset(msg);
+        return;
+      }
+    }
+
+    // 3) Check for anomaly/troubleshooting keywords
+    const lower = transcript.toLowerCase();
+    if (/noise|noisy|clip|unstable|drift|alias|wrong|broken|fault|problem|issue|diagnos/.test(lower)) {
+      this.setStatusLabel('Diagnosing...');
+      const diagnosis = await diagnoseTrace({ description: transcript });
+      let msg = `${diagnosis.probable_cause}. `;
+      msg += diagnosis.fix_steps.slice(0, 2).join('. ') + '.';
+      if (diagnosis.unsafe_flag) msg = 'Warning: safety concern. ' + msg;
+      sessionLogger.logAssistantResponse(msg, 'troubleshooting');
+      await this.speakAndReset(msg);
+      return;
+    }
+
+    // 4) RAG retrieval + instrument state
+    this.setStatusLabel('Thinking...');
+    const ragContext = getContextForQuery(transcript);
+    const instrState = JSON.stringify(getInstrumentState(), null, 1);
+
+    // 5) Ask Gemini with full context
+    const response = await askGemini(transcript, ragContext, instrState);
+    if (!response || response.trim().length === 0) {
+      throw new Error('AI returned empty response.');
+    }
+    this.lastResponse = response;
+    sessionLogger.logAssistantResponse(response);
+
+    // 6) Check if Gemini's response implies a WRITE action
+    const writeMatch = response.match(/(?:set|change|adjust|switch|enable|disable|configure)\s+(?:the\s+)?(\w[\w\s]*?)(?:\s+to\s+|\s+from\s+)/i);
+    if (writeMatch) {
+      const action = this.detectInstrumentAction(response);
+      if (action) {
+        const result = executeFunction(action);
+        if (result.status === 'confirmation_required') {
+          const msg = response + ' ' + result.confirmation_prompt;
+          await this.speakAndReset(msg);
+          return;
+        }
+      }
+    }
+
+    // 7) Check for progress nudge
+    const nudge = getNudge();
+    const finalResponse = nudge ? response + ' ' + nudge : response;
+
+    await this.speakAndReset(finalResponse);
+  }
+
+  private detectInstrumentAction(response: string): { name: string; params: Record<string, unknown> } | null {
+    const lower = response.toLowerCase();
+    if (/timebase|time.?base|time.?div/.test(lower)) {
+      const numMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:ms|us|μs|ns|s)/);
+      if (numMatch) {
+        let val = parseFloat(numMatch[1]);
+        if (lower.includes('ms')) val *= 0.001;
+        else if (lower.includes('us') || lower.includes('μs')) val *= 0.000001;
+        else if (lower.includes('ns')) val *= 0.000000001;
+        return { name: 'set_timebase', params: { timebase_s_div: val } };
+      }
+    }
+    if (/vertical.?scale|v.?div|volts.?per/.test(lower)) {
+      const numMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:mv|v)/);
+      if (numMatch) {
+        let val = parseFloat(numMatch[1]);
+        if (lower.includes('mv')) val *= 0.001;
+        const chMatch = lower.match(/ch(?:annel)?\s*(\d)/);
+        return { name: 'set_vertical_scale', params: { channel: chMatch ? parseInt(chMatch[1]) : 1, scale_v_div: val } };
+      }
+    }
+    if (/coupling.*(ac|dc)/i.test(lower)) {
+      const coupling = /ac/i.test(lower) ? 'AC' : 'DC';
+      const chMatch = lower.match(/ch(?:annel)?\s*(\d)/);
+      return { name: 'set_channel_coupling', params: { channel: chMatch ? parseInt(chMatch[1]) : 1, coupling } };
+    }
+    if (/autoset|auto.?set/.test(lower)) {
+      return { name: 'run_autoset', params: {} };
+    }
+    return null;
+  }
+
+  private async speakAndReset(text: string) {
+    if (this.language === 'tw') {
+      await this.speak(text, 'tw');
+      return;
+    }
+
+    this.currentState = 'SPEAKING';
+    this.setSpeakingVisual(true);
+    this.audioFeedback.speaking();
+    this.setStatusLabel('Generating...');
+
+    try {
+      const audio = await geminiTTS(text);
+      // Animation switches inside playAudioBlob when audio actually starts
+      this.setStatusLabel('Speaking...');
+      await this.playAudioBlob(audio);
+    } catch (err) {
+      console.error('❌ TTS failed:', err);
+    }
+
+    this.currentState = 'READY';
+    this.setSpeakingVisual(false);
+    this.audioFeedback.ready();
+    this.setStatusLabel('Ready');
+
+    if (this.idleAction && !this.isDancing) {
+      this.switchAnimation(this.idleAction, 0.5);
+    }
+
+    if (!this.muted) {
+      setTimeout(() => void this.startListening(), 400);
+    }
+  }
+
+  private async processTwiPipeline(audioBlob: Blob) {
+    this.setStatusLabel('Listening...');
+    const twiTranscript = await this.transcribeOrFail(audioBlob, 'tw');
+    if (!twiTranscript) return;
+
+    sessionLogger.logUserInput(twiTranscript);
+
+    this.setStatusLabel('Translating...');
+    const englishText = await translateText(twiTranscript, 'tw', 'en');
+    if (!englishText || englishText.trim().length === 0 || englishText === 'undefined') {
+      throw new Error('Translation returned empty result.');
+    }
+
+    // RAG + instrument context (same as English)
+    this.setStatusLabel('Thinking...');
+    const ragContext = getContextForQuery(englishText);
+    const instrState = JSON.stringify(getInstrumentState(), null, 1);
+    const englishResponse = await askGemini(englishText, ragContext, instrState);
+    if (!englishResponse || englishResponse.trim().length === 0) {
+      throw new Error('AI returned empty response.');
+    }
+
+    sessionLogger.logAssistantResponse(englishResponse);
+
+    this.setStatusLabel('Translating...');
+    const twiResponse = await translateText(englishResponse, 'en', 'tw');
+    if (!twiResponse || twiResponse.trim().length === 0 || twiResponse === 'undefined') {
+      throw new Error('Final translation returned empty result.');
+    }
+    this.lastResponse = twiResponse;
+
+    await this.speak(twiResponse, 'tw');
+  }
+
+  private async transcribeOrFail(audioBlob: Blob, lang: string): Promise<string | null> {
+    this.setStatusLabel('Thinking...');
+    try {
+      const t0 = Date.now();
+      const transcript = await transcribeAudio(audioBlob, lang);
+      this.currentTranscript = transcript;
+      console.log(`✅ [RHODE_SCHWARZ] Transcript (${Date.now() - t0}ms): "${transcript}"`);
+      return transcript;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.includes('No transcription text') || msg.includes('Empty transcription')) {
+        console.warn('⚠️ [RHODE_SCHWARZ] No speech detected');
         this.setStatusLabel('Listening...');
         this.currentState = 'READY';
         this.setListeningVisual(false);
         this.audioFeedback.ready();
-
-        // Auto-resume listening after a moment
-        if (!this.muted) {
-          setTimeout(() => this.startListening(), 500);
-        }
-        return;
+        if (!this.muted) setTimeout(() => this.startListening(), 500);
+        return null;
       }
-      console.error('❌ [RHODE_SCHWARZ] Transcription failed:', transcribeError);
-      throw new Error(`STT failed: ${errMsg}`);
+      throw new Error(`STT failed: ${msg}`);
     }
-
-    // 2) Translate Twi → English
-    console.log(`📤 [RHODE_SCHWARZ] ========== STEP 2: TRANSLATION (Twi → EN) ==========`);
-    this.setStatusLabel('Thinking...');
-
-    // Validate we have text to translate
-    if (!twiTranscript || twiTranscript.trim().length === 0) {
-      throw new Error('Cannot translate empty transcript. Please speak clearly and try again.');
-    }
-
-    const translateStart = Date.now();
-    const englishText = await translateText(twiTranscript, 'tw', 'en');
-    const translateTime = Date.now() - translateStart;
-    console.log(`✅ [RHODE_SCHWARZ] English translation (${translateTime}ms): "${englishText}"`);
-
-    // Validate translation result
-    if (!englishText || englishText.trim().length === 0 || englishText === 'undefined') {
-      throw new Error('Translation returned empty result. Please try again.');
-    }
-
-    // Show the translation result
-    // Show the translation result
-    this.setStatusLabel('Thinking...');
-
-    // 3) Ask Gemini in English
-    console.log(`📤 [RHODE_SCHWARZ] ========== STEP 3: AI GENERATION (Gemini) ==========`);
-    this.setStatusLabel('Thinking...');
-
-    const geminiStart = Date.now();
-    const englishResponse = await askGemini(englishText);
-    const geminiTime = Date.now() - geminiStart;
-    console.log(`✅ [RHODE_SCHWARZ] Gemini response (${geminiTime}ms): "${englishResponse}"`);
-
-    // Show the AI response
-    // Keep thinking...
-    // this.setStatusLabel(...);
-
-    // 4) Translate Gemini response EN → Twi
-    console.log(`📤 [RHODE_SCHWARZ] ========== STEP 4: TRANSLATION (EN → Twi) ==========`);
-    this.setStatusLabel('Thinking...');
-
-    // Validate we have AI response to translate
-    if (!englishResponse || englishResponse.trim().length === 0) {
-      throw new Error('AI returned empty response. Please try again.');
-    }
-
-    const translateBackStart = Date.now();
-    const twiResponse = await translateText(englishResponse, 'en', 'tw');
-    const translateBackTime = Date.now() - translateBackStart;
-    this.lastResponse = twiResponse;
-    console.log(`✅ [RHODE_SCHWARZ] Twi response (${translateBackTime}ms): "${twiResponse}"`);
-
-    // Validate final translation
-    if (!twiResponse || twiResponse.trim().length === 0 || twiResponse === 'undefined') {
-      throw new Error('Final translation returned empty result. Please try again.');
-    }
-
-    // Show the final Twi response
-    // Show the final Twi response
-    // Ready to speak!
-    this.setStatusLabel('Thinking...');
-
-    // 5) Speak Twi via GhanaNLP TTS
-    console.log(`📤 [RHODE_SCHWARZ] ========== STEP 5: TEXT-TO-SPEECH ==========`);
-    await this.speak(twiResponse, 'tw');
-
-    console.log(`✅ [RHODE_SCHWARZ] ========== PIPELINE COMPLETE ==========`);
   }
+
 
   private handlePipelineError(error: unknown) {
     console.error('❌ [RHODE_SCHWARZ] Pipeline error:', error);
@@ -1007,7 +1161,7 @@ export class RhodeSchwarzAssistant {
   /**
    * Play audio blob using Web Audio API (works in XR and browser).
    */
-  private async playAudioBlob(blob: Blob): Promise<void> {
+  public async playAudioBlob(blob: Blob): Promise<void> {
     return new Promise(async (resolve, reject) => {
       try {
         console.log('🎵 playAudioBlob called with blob:', blob.size, 'bytes, type:', blob.type);

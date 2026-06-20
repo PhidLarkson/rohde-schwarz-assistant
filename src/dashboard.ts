@@ -6,6 +6,9 @@ import {
   eq,
 } from "@iwsdk/core";
 import type { RhodeSchwarzAssistant, RhodeSchwarzState } from "./rhode_schwarz";
+import { captureFrame, identifyComponent } from "./vision";
+import { confirmPending, denyPending, getPendingConfirmation } from "./instrument";
+import { geminiTTS } from "./genai";
 
 export class DashboardSystem extends createSystem({
   dashboard: {
@@ -19,96 +22,164 @@ export class DashboardSystem extends createSystem({
 
   init() {
     this.queries.dashboard.subscribe("qualify", (entity) => {
-      const document = PanelDocument.data.document[entity.index] as UIKitDocument | undefined;
-      if (!document) return;
-      this.document = document;
-      this.attachEventHandlers(document);
+      const doc = PanelDocument.data.document[entity.index] as UIKitDocument | undefined;
+      if (!doc) return;
+      this.document = doc;
+      this.wire(doc);
       this.refreshStatus();
     });
-    this.queries.dashboard.subscribe("disqualify", () => {
-      this.document = null;
-    });
+    this.queries.dashboard.subscribe("disqualify", () => { this.document = null; });
   }
 
-  update(_delta: number, _time: number) {
-    this.refreshStatus();
-  }
+  update(_delta: number, _time: number) { this.refreshStatus(); }
 
-  private attachEventHandlers(document: UIKitDocument) {
-    const summonButton = document.getElementById("btn-summon") as any;
-    const followButton = document.getElementById("btn-follow") as any;
-    const talkButton = document.getElementById("btn-talk") as any;
-    const talkLabel = document.getElementById("btn-talk-label") as any;
-    const resetButton = document.getElementById("btn-reset") as any;
+  private wire(doc: UIKitDocument) {
+    const el = (id: string) => doc.getElementById(id) as any;
 
-    summonButton?.addEventListener("click", () => {
-      const rs = this.getRhoda();
-      if (!rs || !this.world.camera) return;
-      console.log('📍 Dashboard: Summon Rhoda');
-      rs.summon(this.world.camera, rs.getGroundY());
-    });
-
-    followButton?.addEventListener("click", () => {
-      const rs = this.getRhoda();
-      if (!rs) return;
-      const newState = rs.toggleAutoFollow();
-      this.autoFollowEnabled = newState;
-      console.log(`🚶 Dashboard: Auto-Follow ${newState ? 'ON' : 'OFF'}`);
-      followButton?.setProperties?.({
-        text: 'Autofollow',
-        class: newState ? 'btn accent' : 'btn'
-      });
-    });
-
-    talkButton?.addEventListener("click", () => {
+    el("btn-talk")?.addEventListener("click", () => {
       const rs = this.getRhoda();
       if (!rs) return;
       const newMuted = !rs.isMuted();
       rs.setMuted(newMuted);
-      console.log(`🔇 Dashboard: Mute toggled -> ${newMuted ? 'MUTED' : 'UNMUTED'}`);
-      talkLabel?.setProperties?.({ text: newMuted ? 'Unmute' : 'Mute' });
-      talkButton?.setProperties?.({ class: newMuted ? 'btn danger' : 'btn primary' });
+      el("btn-talk")?.setProperties?.({
+        text: newMuted ? 'Start Mic' : 'Stop Mic',
+        class: newMuted ? 'btn-mic-off' : 'btn-mic-on',
+      });
     });
 
-    resetButton?.addEventListener("click", () => {
+    el("btn-lang")?.addEventListener("click", () => {
       const rs = this.getRhoda();
       if (!rs) return;
-      rs.resetConversation();
-      console.log('🔄 Dashboard: Session reset');
+      const next = rs.getLanguage() === 'en' ? 'tw' : 'en';
+      rs.setLanguage(next);
+      el("btn-lang")?.setProperties?.({
+        text: next === 'en' ? 'Switch to Twi' : 'Switch to English',
+        class: next === 'tw' ? 'btn-on' : 'btn',
+      });
     });
+
+    el("btn-identify")?.addEventListener("click", () => this.handleIdentify());
+
+    el("btn-summon")?.addEventListener("click", () => {
+      const rs = this.getRhoda();
+      if (rs && this.world.camera) rs.summon(this.world.camera, rs.getGroundY());
+    });
+
+    el("btn-follow")?.addEventListener("click", () => {
+      const rs = this.getRhoda();
+      if (!rs) return;
+      const on = rs.toggleAutoFollow();
+      this.autoFollowEnabled = on;
+      el("btn-follow")?.setProperties?.({ class: on ? 'btn-on' : 'btn' });
+    });
+
+    el("btn-reset")?.addEventListener("click", () => {
+      const rs = this.getRhoda();
+      if (rs) rs.resetConversation();
+    });
+
+    el("btn-allow")?.addEventListener("click", () => {
+      if (!getPendingConfirmation()) return;
+      confirmPending();
+      this.hideConfirmButtons();
+      this.setStatus('Confirmed');
+      setTimeout(() => this.setStatus('Ready'), 2000);
+    });
+
+    el("btn-deny")?.addEventListener("click", () => {
+      if (!getPendingConfirmation()) return;
+      denyPending();
+      this.hideConfirmButtons();
+      this.setStatus('Cancelled');
+      setTimeout(() => this.setStatus('Ready'), 2000);
+    });
+  }
+
+  private async handleIdentify() {
+    const rs = this.getRhoda();
+    this.setStatus('Capturing...');
+
+    try {
+      const frame = await captureFrame();
+      if (!frame) {
+        this.setStatus('No camera');
+        setTimeout(() => this.setStatus('Ready'), 3000);
+        return;
+      }
+
+      this.setStatus('Analyzing...');
+      const result = await identifyComponent(frame);
+      this.setStatus(result.label);
+
+      // Speak result with Gemini TTS + avatar animation
+      const speech = `${result.description || result.label}${result.safety_note ? '. ' + result.safety_note : ''}`;
+      if (rs) {
+        try {
+          rs.setState('SPEAKING');
+          rs.setStatusLabel('Speaking...');
+          const audio = await geminiTTS(speech);
+          await rs.playAudioBlob(audio);
+          rs.setState('READY');
+          rs.setStatusLabel('Ready');
+        } catch (_) {
+          const u = new SpeechSynthesisUtterance(speech);
+          u.lang = 'en-US';
+          speechSynthesis.speak(u);
+          rs.setState('READY');
+        }
+      }
+
+      setTimeout(() => this.setStatus('Ready'), 6000);
+    } catch {
+      this.setStatus('Failed');
+      setTimeout(() => this.setStatus('Ready'), 3000);
+    }
+  }
+
+  private setStatus(text: string) {
+    const node = this.document?.getElementById("status-mode") as any;
+    node?.setProperties?.({ text });
+  }
+
+  private showConfirmButtons() {
+    if (!this.document) return;
+    (this.document.getElementById("btn-allow") as any)?.setProperties?.({ class: 'btn-yes' });
+    (this.document.getElementById("btn-deny") as any)?.setProperties?.({ class: 'btn-no' });
+  }
+
+  private hideConfirmButtons() {
+    if (!this.document) return;
+    (this.document.getElementById("btn-allow") as any)?.setProperties?.({ class: 'btn-hidden' });
+    (this.document.getElementById("btn-deny") as any)?.setProperties?.({ class: 'btn-hidden' });
   }
 
   private refreshStatus() {
     if (!this.document) return;
     const rs = this.getRhoda();
-
-    const modeNode = this.document.getElementById("status-mode") as any;
-    const talkButton = this.document.getElementById("btn-talk") as any;
-    const talkLabel = this.document.getElementById("btn-talk-label") as any;
-    const followButton = this.document.getElementById("btn-follow") as any;
+    const talkBtn = this.document.getElementById("btn-talk") as any;
+    const followBtn = this.document.getElementById("btn-follow") as any;
 
     if (rs) {
-      const realState = rs.getState();
-      const stageLabel = typeof rs.getStatusLabel === 'function' ? rs.getStatusLabel() : undefined;
-      const statusText = stageLabel || realState || 'READY';
+      const state = rs.getState();
+      const label = typeof rs.getStatusLabel === 'function' ? rs.getStatusLabel() : undefined;
+      const text = label || state || 'Ready';
+      const muted = rs.isMuted ? rs.isMuted() : true;
 
-      const isMuted = rs.isMuted ? rs.isMuted() : false;
-      const talkText = isMuted ? 'Unmute' : 'Mute';
-      const talkClass = isMuted ? 'btn danger' : 'btn primary';
-
-      this.logStatus(realState as any, statusText);
-      modeNode?.setProperties?.({ text: statusText });
-      talkLabel?.setProperties?.({ text: talkText });
-      talkButton?.setProperties?.({ class: talkClass, disabled: false });
-
-      const followState = typeof rs.isAutoFollowEnabled === 'function' ? rs.isAutoFollowEnabled() : this.autoFollowEnabled;
-      this.autoFollowEnabled = followState;
-      followButton?.setProperties?.({
-        text: 'Autofollow',
-        class: followState ? 'btn accent' : 'btn'
+      this.logStatus(state as any, text);
+      this.setStatus(text);
+      talkBtn?.setProperties?.({
+        text: muted ? 'Start Mic' : 'Stop Mic',
+        class: muted ? 'btn-mic-off' : 'btn-mic-on',
       });
+
+      const following = typeof rs.isAutoFollowEnabled === 'function'
+        ? rs.isAutoFollowEnabled() : this.autoFollowEnabled;
+      this.autoFollowEnabled = following;
+      followBtn?.setProperties?.({ class: following ? 'btn-on' : 'btn' });
+
+      if (getPendingConfirmation()) this.showConfirmButtons();
     } else {
-      modeNode?.setProperties?.({ text: "OFFLINE" });
+      this.setStatus('Offline');
     }
   }
 
@@ -117,9 +188,8 @@ export class DashboardSystem extends createSystem({
   }
 
   private logStatus(state: RhodeSchwarzState, text: string) {
-    const snapshot = `${state}|${text}`;
-    if (this.lastStatusSnapshot === snapshot) return;
-    this.lastStatusSnapshot = snapshot;
-    console.log(`📺 Dashboard status → [${state}] ${text}`);
+    const s = `${state}|${text}`;
+    if (this.lastStatusSnapshot === s) return;
+    this.lastStatusSnapshot = s;
   }
 }
