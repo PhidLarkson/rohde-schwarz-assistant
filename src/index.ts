@@ -7,6 +7,8 @@ import {
   PanelUI,
   PanelUISystem,
   Interactable,
+  InputSystem,
+  GrabSystem,
 } from "@iwsdk/core";
 import * as THREE from 'three';
 
@@ -107,6 +109,11 @@ World.create(document.getElementById("scene-container") as HTMLDivElement, {
   }
   world.registerSystem(RhodeSchwarzSystem);
 
+  // IWSDK core systems — InputSystem handles pointer raycasting against
+  // Interactable entities (renders the ray beam + cursor, adds Hovered/Pressed tags).
+  // GrabSystem handles one-hand grab interactions.
+  world.registerSystem(InputSystem);
+  world.registerSystem(GrabSystem);
   world.registerSystem(PanelUISystem);
   world.registerSystem(HandRaySystem);
   world.registerSystem(DashboardSystem);
